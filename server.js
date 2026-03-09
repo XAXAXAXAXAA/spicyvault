@@ -12,14 +12,27 @@ const PORT = process.env.PORT || 3001;
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'lozinka123';
 
-// TEST LOCKR API
+// LOCKR
 const LOCKR_API_URL = 'https://lockr.so/api/v1/lockers';
 const LOCKR_SECRET_API_KEY =
   process.env.LOCKR_SECRET_API_KEY ||
-  '0383d1e4a1f19d41745041748f3fc971a228c72065';
+  'CHANGE_ME';
+
+// PAYPAL
+const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
+const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_ENV = process.env.PAYPAL_ENV || 'sandbox'; // sandbox or live
+
+const PAYPAL_BASE_URL =
+  PAYPAL_ENV === 'live'
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com';
 
 const SESSION_SECRET =
   process.env.SESSION_SECRET || 'spicyvault_secret_key_demo_change_this';
+
+const APP_BASE_URL =
+  process.env.APP_BASE_URL || `http://127.0.0.1:${PORT}`;
 
 const DB_PATH = path.join(__dirname, 'spicyvault.db');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -63,6 +76,20 @@ db.serialize(() => {
       path TEXT,
       referer TEXT,
       created_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS vip_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      paypal_order_id TEXT NOT NULL UNIQUE,
+      plan TEXT NOT NULL,
+      amount TEXT NOT NULL,
+      currency TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     )
   `);
 });
@@ -137,10 +164,156 @@ function getCountryCodeFromIp(ip) {
 
 function countryCodeToFlagEmoji(code) {
   if (!code || code === 'LOCAL') return '🏠';
-
   return code
     .toUpperCase()
     .replace(/./g, char => String.fromCodePoint(127397 + char.charCodeAt()));
+}
+
+function getPlanConfig(plan) {
+  const plans = {
+    week: { label: 'VIP 1 WEEK', value: '5.00', currency: 'EUR' },
+    month: { label: 'VIP 1 MONTH', value: '15.00', currency: 'EUR' },
+    lifetime: { label: 'VIP LIFETIME', value: '25.00', currency: 'EUR' }
+  };
+
+  return plans[plan] || null;
+}
+
+async function getPayPalAccessToken() {
+  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+    throw new Error('Missing PayPal credentials.');
+  }
+
+  const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
+
+  const response = await fetch(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${auth}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'grant_type=client_credentials'
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.access_token) {
+    console.error('PayPal token error:', data);
+    throw new Error('Failed to get PayPal access token.');
+  }
+
+  return data.access_token;
+}
+
+async function createPayPalOrder({ plan, userId }) {
+  const planConfig = getPlanConfig(plan);
+  if (!planConfig) throw new Error('Invalid VIP plan.');
+
+  const accessToken = await getPayPalAccessToken();
+
+  const returnUrl = `${APP_BASE_URL}/paypal-success?plan=${encodeURIComponent(plan)}`;
+  const cancelUrl = `${APP_BASE_URL}/?paypal=cancel`;
+
+  const response = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      intent: 'CAPTURE',
+      purchase_units: [
+        {
+          reference_id: `user_${userId}_${plan}`,
+          description: planConfig.label,
+          amount: {
+            currency_code: planConfig.currency,
+            value: planConfig.value
+          }
+        }
+      ],
+      application_context: {
+        brand_name: 'Spicy Vault',
+        landing_page: 'LOGIN',
+        user_action: 'PAY_NOW',
+        return_url: returnUrl,
+        cancel_url: cancelUrl
+      }
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error('PayPal create order error:', data);
+    throw new Error('Failed to create PayPal order.');
+  }
+
+  const approveLink = data.links?.find(link => link.rel === 'approve')?.href;
+  if (!approveLink) {
+    throw new Error('PayPal approval link not found.');
+  }
+
+  await run(
+    `INSERT INTO vip_orders
+      (user_id, paypal_order_id, plan, amount, currency, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userId,
+      data.id,
+      plan,
+      planConfig.value,
+      planConfig.currency,
+      'CREATED',
+      new Date().toISOString(),
+      new Date().toISOString()
+    ]
+  );
+
+  return {
+    orderId: data.id,
+    approveLink
+  };
+}
+
+async function capturePayPalOrder(orderId) {
+  const accessToken = await getPayPalAccessToken();
+
+  const response = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderId}/capture`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error('PayPal capture error:', data);
+    throw new Error('Failed to capture PayPal payment.');
+  }
+
+  return data;
+}
+
+async function upgradeUserVipFromOrder(orderId) {
+  const order = await get('SELECT * FROM vip_orders WHERE paypal_order_id = ?', [orderId]);
+  if (!order) throw new Error('VIP order not found.');
+
+  if (order.status === 'COMPLETED') {
+    return;
+  }
+
+  await run(
+    'UPDATE users SET is_vip = 1 WHERE id = ?',
+    [order.user_id]
+  );
+
+  await run(
+    'UPDATE vip_orders SET status = ?, updated_at = ? WHERE paypal_order_id = ?',
+    ['COMPLETED', new Date().toISOString(), orderId]
+  );
 }
 
 const storage = multer.diskStorage({
@@ -233,7 +406,7 @@ function requireAdmin(req, res, next) {
 
 function requireUser(req, res, next) {
   if (!req.session.userId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.redirect('/login');
   }
   next();
 }
@@ -260,6 +433,50 @@ app.get('/admin', (req, res) => {
   }
 
   res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
+});
+
+app.get('/paypal-success', requireUser, async (req, res) => {
+  try {
+    const orderId = req.query.token;
+
+    if (!orderId) {
+      return res.redirect('/?paypal=missing');
+    }
+
+    const existing = await get(
+      'SELECT * FROM vip_orders WHERE paypal_order_id = ? AND user_id = ?',
+      [orderId, req.session.userId]
+    );
+
+    if (!existing) {
+      return res.redirect('/?paypal=notfound');
+    }
+
+    if (existing.status !== 'COMPLETED') {
+      await capturePayPalOrder(orderId);
+      await upgradeUserVipFromOrder(orderId);
+    }
+
+    res.redirect('/?paypal=success');
+  } catch (error) {
+    console.error('PayPal success error:', error);
+    res.redirect('/?paypal=error');
+  }
+});
+
+app.get('/api/paypal/start/:plan', requireUser, async (req, res) => {
+  try {
+    const plan = req.params.plan;
+    const result = await createPayPalOrder({
+      plan,
+      userId: req.session.userId
+    });
+
+    res.redirect(result.approveLink);
+  } catch (error) {
+    console.error('PayPal start error:', error);
+    res.redirect('/?paypal=error');
+  }
 });
 
 app.post('/api/admin/login', (req, res) => {
