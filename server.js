@@ -8,13 +8,18 @@ const bcrypt = require('bcryptjs');
 const geoip = require('geoip-lite');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
-const ADMIN_PASSWORD = 'lozinka123';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'lozinka123';
 
 // TEST LOCKR API
 const LOCKR_API_URL = 'https://lockr.so/api/v1/lockers';
-const LOCKR_SECRET_API_KEY = '0383d1e4a1f19d41745041748f3fc971a228c72065';
+const LOCKR_SECRET_API_KEY =
+  process.env.LOCKR_SECRET_API_KEY ||
+  '0383d1e4a1f19d41745041748f3fc971a228c72065';
+
+const SESSION_SECRET =
+  process.env.SESSION_SECRET || 'spicyvault_secret_key_demo_change_this';
 
 const DB_PATH = path.join(__dirname, 'spicyvault.db');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -168,7 +173,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
-  secret: 'spicyvault_secret_key_demo_change_this',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -572,5 +577,5 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://127.0.0.1:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
