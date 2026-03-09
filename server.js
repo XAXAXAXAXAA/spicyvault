@@ -237,9 +237,6 @@ async function createPayPalOrder({ plan, userId }) {
 
   const accessToken = await getPayPalAccessToken();
 
-  const returnUrl = `${APP_BASE_URL}/paypal-success?plan=${encodeURIComponent(plan)}`;
-  const cancelUrl = `${APP_BASE_URL}/?paypal=cancel`;
-
   const response = await fetchFn(`${PAYPAL_BASE_URL}/v2/checkout/orders`, {
     method: 'POST',
     headers: {
@@ -261,10 +258,11 @@ async function createPayPalOrder({ plan, userId }) {
       ],
       application_context: {
         brand_name: 'Spicy Vault',
+        landing_page: 'LOGIN',
         user_action: 'PAY_NOW',
-        return_url: returnUrl,
-        cancel_url: cancelUrl,
-        shipping_preference: 'NO_SHIPPING'
+        shipping_preference: 'NO_SHIPPING',
+        return_url: `${APP_BASE_URL}/?paypal=success`,
+        cancel_url: `${APP_BASE_URL}/?paypal=cancel`
       }
     })
   });
@@ -278,13 +276,6 @@ async function createPayPalOrder({ plan, userId }) {
       data
     });
     throw new Error('Failed to create PayPal order.');
-  }
-
-  const approveLink = data.links?.find(link => link.rel === 'approve')?.href;
-
-  if (!approveLink) {
-    console.error('PayPal approval link missing:', data);
-    throw new Error('PayPal approval link not found.');
   }
 
   const now = new Date().toISOString();
@@ -306,8 +297,7 @@ async function createPayPalOrder({ plan, userId }) {
   );
 
   return {
-    orderId: data.id,
-    approveLink
+    orderId: data.id
   };
 }
 
@@ -337,31 +327,6 @@ async function capturePayPalOrder(orderId) {
   return data;
 }
 
-async function getPayPalOrder(orderId) {
-  const accessToken = await getPayPalAccessToken();
-
-  const response = await fetchFn(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderId}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
-    }
-  });
-
-  const data = await parseJsonSafe(response);
-
-  if (!response.ok) {
-    console.error('PayPal get order error:', {
-      status: response.status,
-      statusText: response.statusText,
-      data
-    });
-    throw new Error('Failed to verify PayPal order.');
-  }
-
-  return data;
-}
-
 function isPayPalOrderCompleted(orderData) {
   if (!orderData) return false;
 
@@ -386,10 +351,7 @@ async function upgradeUserVipFromOrder(orderId) {
     return;
   }
 
-  await run(
-    'UPDATE users SET is_vip = 1 WHERE id = ?',
-    [order.user_id]
-  );
+  await run('UPDATE users SET is_vip = 1 WHERE id = ?', [order.user_id]);
 
   await run(
     'UPDATE vip_orders SET status = ?, updated_at = ? WHERE paypal_order_id = ?',
@@ -487,9 +449,16 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-function requireUser(req, res, next) {
+function requireUserPage(req, res, next) {
   if (!req.session.userId) {
     return res.redirect('/login');
+  }
+  next();
+}
+
+function requireUserApi(req, res, next) {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Login required.' });
   }
   next();
 }
@@ -518,12 +487,44 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
 });
 
-app.get('/paypal-success', requireUser, async (req, res) => {
+app.get('/paypal-success', requireUserPage, (req, res) => {
+  res.redirect('/?paypal=success');
+});
+
+app.get('/api/paypal/config', (req, res) => {
+  res.json({
+    clientId: PAYPAL_CLIENT_ID || '',
+    currency: 'EUR',
+    env: PAYPAL_ENV
+  });
+});
+
+app.post('/api/paypal/create-order', requireUserApi, async (req, res) => {
   try {
-    const orderId = req.query.token;
+    const plan = (req.body.plan || '').trim();
+
+    const result = await createPayPalOrder({
+      plan,
+      userId: req.session.userId
+    });
+
+    res.json({
+      orderID: result.orderId
+    });
+  } catch (error) {
+    console.error('PayPal create-order route error:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to create order.'
+    });
+  }
+});
+
+app.post('/api/paypal/capture-order', requireUserApi, async (req, res) => {
+  try {
+    const orderId = (req.body.orderID || '').trim();
 
     if (!orderId) {
-      return res.redirect('/?paypal=missing');
+      return res.status(400).json({ error: 'Missing orderID.' });
     }
 
     const existing = await get(
@@ -532,49 +533,28 @@ app.get('/paypal-success', requireUser, async (req, res) => {
     );
 
     if (!existing) {
-      return res.redirect('/?paypal=notfound');
+      return res.status(404).json({ error: 'VIP order not found.' });
     }
 
     if (existing.status === 'COMPLETED') {
-      return res.redirect('/?paypal=success');
+      return res.json({ success: true, alreadyCompleted: true });
     }
 
-    let orderData;
+    const captureData = await capturePayPalOrder(orderId);
 
-    try {
-      orderData = await capturePayPalOrder(orderId);
-    } catch (captureError) {
-      console.error('Capture attempt failed, checking order state:', captureError.message);
-      orderData = await getPayPalOrder(orderId);
-    }
-
-    if (!isPayPalOrderCompleted(orderData)) {
-      console.error('PayPal order not completed after return:', orderData);
-      return res.redirect('/?paypal=error');
+    if (!isPayPalOrderCompleted(captureData)) {
+      console.error('PayPal capture incomplete:', captureData);
+      return res.status(400).json({ error: 'Payment not completed.' });
     }
 
     await upgradeUserVipFromOrder(orderId);
 
-    res.redirect('/?paypal=success');
+    res.json({ success: true });
   } catch (error) {
-    console.error('PayPal success error:', error);
-    res.redirect('/?paypal=error');
-  }
-});
-
-app.get('/api/paypal/start/:plan', requireUser, async (req, res) => {
-  try {
-    const plan = req.params.plan;
-
-    const result = await createPayPalOrder({
-      plan,
-      userId: req.session.userId
+    console.error('PayPal capture-order route error:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to capture order.'
     });
-
-    res.redirect(result.approveLink);
-  } catch (error) {
-    console.error('PayPal start error:', error);
-    res.redirect('/?paypal=error');
   }
 });
 
@@ -883,7 +863,7 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/protected', requireUser, (req, res) => {
+app.get('/api/protected', requireUserPage, (req, res) => {
   res.json({ success: true });
 });
 
@@ -898,4 +878,8 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`APP_BASE_URL=${APP_BASE_URL}`);
   console.log(`PAYPAL_ENV=${PAYPAL_ENV}`);
+  console.log('PayPal debug startup:', {
+    hasClientId: !!PAYPAL_CLIENT_ID,
+    hasClientSecret: !!PAYPAL_CLIENT_SECRET
+  });
 });
