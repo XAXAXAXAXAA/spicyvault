@@ -7,8 +7,15 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const geoip = require('geoip-lite');
 
+const fetchFn =
+  typeof fetch === 'function'
+    ? fetch.bind(globalThis)
+    : (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+app.set('trust proxy', 1);
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'lozinka123';
 
@@ -179,6 +186,19 @@ function getPlanConfig(plan) {
   return plans[plan] || null;
 }
 
+function getSessionCookieSecure() {
+  return process.env.NODE_ENV === 'production';
+}
+
+async function parseJsonSafe(response) {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { raw: text };
+  }
+}
+
 async function getPayPalAccessToken() {
   if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
     throw new Error('Missing PayPal credentials.');
@@ -186,19 +206,23 @@ async function getPayPalAccessToken() {
 
   const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
 
-  const response = await fetch(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
+  const response = await fetchFn(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
     method: 'POST',
     headers: {
-      'Authorization': `Basic ${auth}`,
+      Authorization: `Basic ${auth}`,
       'Content-Type': 'application/x-www-form-urlencoded'
     },
     body: 'grant_type=client_credentials'
   });
 
-  const data = await response.json();
+  const data = await parseJsonSafe(response);
 
   if (!response.ok || !data.access_token) {
-    console.error('PayPal token error:', data);
+    console.error('PayPal token error:', {
+      status: response.status,
+      statusText: response.statusText,
+      data
+    });
     throw new Error('Failed to get PayPal access token.');
   }
 
@@ -207,18 +231,21 @@ async function getPayPalAccessToken() {
 
 async function createPayPalOrder({ plan, userId }) {
   const planConfig = getPlanConfig(plan);
-  if (!planConfig) throw new Error('Invalid VIP plan.');
+  if (!planConfig) {
+    throw new Error('Invalid VIP plan.');
+  }
 
   const accessToken = await getPayPalAccessToken();
 
   const returnUrl = `${APP_BASE_URL}/paypal-success?plan=${encodeURIComponent(plan)}`;
   const cancelUrl = `${APP_BASE_URL}/?paypal=cancel`;
 
-  const response = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders`, {
+  const response = await fetchFn(`${PAYPAL_BASE_URL}/v2/checkout/orders`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation'
     },
     body: JSON.stringify({
       intent: 'CAPTURE',
@@ -234,28 +261,36 @@ async function createPayPalOrder({ plan, userId }) {
       ],
       application_context: {
         brand_name: 'Spicy Vault',
-        landing_page: 'LOGIN',
         user_action: 'PAY_NOW',
         return_url: returnUrl,
-        cancel_url: cancelUrl
+        cancel_url: cancelUrl,
+        shipping_preference: 'NO_SHIPPING'
       }
     })
   });
 
-  const data = await response.json();
+  const data = await parseJsonSafe(response);
 
-  if (!response.ok) {
-    console.error('PayPal create order error:', data);
+  if (!response.ok || !data.id) {
+    console.error('PayPal create order error:', {
+      status: response.status,
+      statusText: response.statusText,
+      data
+    });
     throw new Error('Failed to create PayPal order.');
   }
 
   const approveLink = data.links?.find(link => link.rel === 'approve')?.href;
+
   if (!approveLink) {
+    console.error('PayPal approval link missing:', data);
     throw new Error('PayPal approval link not found.');
   }
 
+  const now = new Date().toISOString();
+
   await run(
-    `INSERT INTO vip_orders
+    `INSERT OR REPLACE INTO vip_orders
       (user_id, paypal_order_id, plan, amount, currency, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -264,9 +299,9 @@ async function createPayPalOrder({ plan, userId }) {
       plan,
       planConfig.value,
       planConfig.currency,
-      'CREATED',
-      new Date().toISOString(),
-      new Date().toISOString()
+      data.status || 'CREATED',
+      now,
+      now
     ]
   );
 
@@ -279,27 +314,73 @@ async function createPayPalOrder({ plan, userId }) {
 async function capturePayPalOrder(orderId) {
   const accessToken = await getPayPalAccessToken();
 
-  const response = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderId}/capture`, {
+  const response = await fetchFn(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderId}/capture`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation'
     }
   });
 
-  const data = await response.json();
+  const data = await parseJsonSafe(response);
 
   if (!response.ok) {
-    console.error('PayPal capture error:', data);
+    console.error('PayPal capture error:', {
+      status: response.status,
+      statusText: response.statusText,
+      data
+    });
     throw new Error('Failed to capture PayPal payment.');
   }
 
   return data;
 }
 
+async function getPayPalOrder(orderId) {
+  const accessToken = await getPayPalAccessToken();
+
+  const response = await fetchFn(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderId}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const data = await parseJsonSafe(response);
+
+  if (!response.ok) {
+    console.error('PayPal get order error:', {
+      status: response.status,
+      statusText: response.statusText,
+      data
+    });
+    throw new Error('Failed to verify PayPal order.');
+  }
+
+  return data;
+}
+
+function isPayPalOrderCompleted(orderData) {
+  if (!orderData) return false;
+
+  if (orderData.status === 'COMPLETED') {
+    return true;
+  }
+
+  const captures =
+    orderData.purchase_units?.flatMap(unit => unit.payments?.captures || []) || [];
+
+  return captures.some(capture => capture.status === 'COMPLETED');
+}
+
 async function upgradeUserVipFromOrder(orderId) {
   const order = await get('SELECT * FROM vip_orders WHERE paypal_order_id = ?', [orderId]);
-  if (!order) throw new Error('VIP order not found.');
+
+  if (!order) {
+    throw new Error('VIP order not found.');
+  }
 
   if (order.status === 'COMPLETED') {
     return;
@@ -349,9 +430,11 @@ app.use(session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  proxy: true,
   cookie: {
     httpOnly: true,
-    secure: false,
+    secure: getSessionCookieSecure(),
+    sameSite: 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000
   }
 }));
@@ -452,10 +535,25 @@ app.get('/paypal-success', requireUser, async (req, res) => {
       return res.redirect('/?paypal=notfound');
     }
 
-    if (existing.status !== 'COMPLETED') {
-      await capturePayPalOrder(orderId);
-      await upgradeUserVipFromOrder(orderId);
+    if (existing.status === 'COMPLETED') {
+      return res.redirect('/?paypal=success');
     }
+
+    let orderData;
+
+    try {
+      orderData = await capturePayPalOrder(orderId);
+    } catch (captureError) {
+      console.error('Capture attempt failed, checking order state:', captureError.message);
+      orderData = await getPayPalOrder(orderId);
+    }
+
+    if (!isPayPalOrderCompleted(orderData)) {
+      console.error('PayPal order not completed after return:', orderData);
+      return res.redirect('/?paypal=error');
+    }
+
+    await upgradeUserVipFromOrder(orderId);
 
     res.redirect('/?paypal=success');
   } catch (error) {
@@ -467,6 +565,7 @@ app.get('/paypal-success', requireUser, async (req, res) => {
 app.get('/api/paypal/start/:plan', requireUser, async (req, res) => {
   try {
     const plan = req.params.plan;
+
     const result = await createPayPalOrder({
       plan,
       userId: req.session.userId
@@ -644,16 +743,16 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
       target: parsedTarget.toString()
     };
 
-    const lockrResponse = await fetch(LOCKR_API_URL, {
+    const lockrResponse = await fetchFn(LOCKR_API_URL, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOCKR_SECRET_API_KEY}`,
+        Authorization: `Bearer ${LOCKR_SECRET_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     });
 
-    const lockrResult = await lockrResponse.json().catch(() => null);
+    const lockrResult = await parseJsonSafe(lockrResponse);
 
     if (!lockrResponse.ok) {
       return res.status(lockrResponse.status).json({
@@ -695,7 +794,9 @@ app.delete('/api/items/:id', requireAdmin, async (req, res) => {
     }
 
     if (item.image_url && item.image_url.startsWith('/uploads/')) {
-      const filePath = path.join(__dirname, item.image_url);
+      const safeRelativePath = item.image_url.replace(/^\/+/, '');
+      const filePath = path.join(__dirname, safeRelativePath);
+
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
@@ -795,4 +896,6 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`APP_BASE_URL=${APP_BASE_URL}`);
+  console.log(`PAYPAL_ENV=${PAYPAL_ENV}`);
 });
