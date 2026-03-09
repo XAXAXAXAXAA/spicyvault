@@ -1,7 +1,7 @@
 {
   "name": "spicyvault",
-  "version": "2.1.0",
-  "description": "Spicy Vault with admin, VIP roles and stats",
+  "version": "2.2.0",
+  "description": "Spicy Vault with admin, VIP roles, stats and PayPal VIP checkout",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
