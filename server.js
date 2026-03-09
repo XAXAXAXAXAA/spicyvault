@@ -278,6 +278,7 @@ async function createPayPalOrder({ plan, userId }) {
     throw new Error('Failed to create PayPal order.');
   }
 
+  const approveLink = data.links?.find(link => link.rel === 'approve')?.href || null;
   const now = new Date().toISOString();
 
   await run(
@@ -297,7 +298,8 @@ async function createPayPalOrder({ plan, userId }) {
   );
 
   return {
-    orderId: data.id
+    orderId: data.id,
+    approveLink
   };
 }
 
@@ -555,6 +557,27 @@ app.post('/api/paypal/capture-order', requireUserApi, async (req, res) => {
     res.status(500).json({
       error: error.message || 'Failed to capture order.'
     });
+  }
+});
+
+/* BACKWARD COMPATIBILITY FOR OLD LINKS */
+app.get('/api/paypal/start/:plan', requireUserPage, async (req, res) => {
+  try {
+    const plan = (req.params.plan || '').trim();
+
+    const result = await createPayPalOrder({
+      plan,
+      userId: req.session.userId
+    });
+
+    if (!result.approveLink) {
+      return res.redirect('/?paypal=error');
+    }
+
+    res.redirect(result.approveLink);
+  } catch (error) {
+    console.error('PayPal start compatibility route error:', error);
+    res.redirect('/?paypal=error');
   }
 });
 
