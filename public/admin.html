@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spicy Vault Admin</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand-wrap">
+        <div class="brand-badge">🛠️</div>
+        <div class="brand-copy">
+          <div class="brand-kicker">ADMIN CONTROL PANEL</div>
+          <h1>Spicy Vault Admin</h1>
+        </div>
+      </div>
+
+      <div class="header-tools">
+        <a class="ghost-link" href="/">Public Site</a>
+        <button id="logoutBtn" class="solid-link" type="button">Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <div class="container">
+      <section class="hero-panel">
+        <div class="hero-left">
+          <div class="hero-kicker">Administration</div>
+          <h2>Manage uploads, users and stats</h2>
+          <p>Upload items, control VIP users and track basic visit statistics.</p>
+        </div>
+
+        <div class="hero-stats" id="statsGrid"></div>
+      </section>
+
+      <section class="content-panel" style="margin-bottom:24px;">
+        <h2 style="margin-top:0;">Upload New Item</h2>
+
+        <form id="uploadForm" enctype="multipart/form-data">
+          <div class="form-grid">
+            <div class="field">
+              <label for="title">Title</label>
+              <input class="input" id="title" name="title" type="text" required />
+            </div>
+
+            <div class="field">
+              <label for="target">Target URL</label>
+              <input class="input" id="target" name="target" type="url" required />
+            </div>
+
+            <div class="field full">
+              <label for="imageUrl">Image URL</label>
+              <input class="input" id="imageUrl" name="imageUrl" type="url" placeholder="https://i.postimg.cc/....jpg" />
+            </div>
+
+            <div class="field full">
+              <label>Upload image</label>
+              <div id="dropzone" class="dropzone">
+                Drag and drop image here or choose file
+                <div style="margin-top:12px;">
+                  <input id="imageFile" name="imageFile" type="file" accept=".jpg,.jpeg,.png,.webp,.gif" />
+                </div>
+              </div>
+              <div class="preview-box" id="previewBox"></div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="solid-link" type="submit" id="submitBtn">Post Item</button>
+          </div>
+
+          <div id="status" class="status"></div>
+        </form>
+      </section>
+
+      <section class="content-panel" style="margin-bottom:24px;">
+        <h2 style="margin-top:0;">Users</h2>
+        <div id="usersGrid" class="users-grid"></div>
+      </section>
+
+      <section class="content-panel" style="margin-bottom:24px;">
+        <h2 style="margin-top:0;">Latest Visits</h2>
+        <div id="visitsTableWrap" class="table-wrap"></div>
+      </section>
+
+      <section class="content-panel">
+        <h2 style="margin-top:0;">Uploaded Items</h2>
+        <div id="adminCards" class="admin-grid"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const form = document.getElementById('uploadForm');
+    const statusBox = document.getElementById('status');
+    const submitBtn = document.getElementById('submitBtn');
+    const adminCards = document.getElementById('adminCards');
+    const usersGrid = document.getElementById('usersGrid');
+    const statsGrid = document.getElementById('statsGrid');
+    const visitsTableWrap = document.getElementById('visitsTableWrap');
+    const imageFileInput = document.getElementById('imageFile');
+    const imageUrlInput = document.getElementById('imageUrl');
+    const previewBox = document.getElementById('previewBox');
+    const dropzone = document.getElementById('dropzone');
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function formatDateOnly(dateString) {
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return '';
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${day}.${month}.${year}`;
+    }
+
+    function formatTimeOnly(dateString) {
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return '';
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
+
+    function formatDateTimeLocal(dateString) {
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return '';
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      return `${day}.${month}.${year} ${hours}:${minutes}`;
+    }
+
+    function showPreviewFromFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        previewBox.innerHTML = `<img src="${reader.result}" alt="Preview">`;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    imageFileInput.addEventListener('change', () => {
+      if (imageFileInput.files[0]) showPreviewFromFile(imageFileInput.files[0]);
+    });
+
+    imageUrlInput.addEventListener('input', () => {
+      if (!imageFileInput.files.length && imageUrlInput.value.trim()) {
+        previewBox.innerHTML = `<img src="${escapeHtml(imageUrlInput.value.trim())}" alt="Preview">`;
+      }
+    });
+
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+
+    dropzone.addEventListener('dragleave', () => {
+      dropzone.classList.remove('dragover');
+    });
+
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      imageFileInput.files = dt.files;
+      showPreviewFromFile(file);
+    });
+
+    async function loadItems() {
+      const res = await fetch('/api/items');
+      const items = await res.json();
+
+      adminCards.innerHTML = items.length ? items.map(item => `
+        <article class="admin-card">
+          <div class="admin-card-image-wrap">
+            <img class="admin-card-image" src="${escapeHtml(item.image_url || 'https://via.placeholder.com/300x500?text=No+Image')}" alt="${escapeHtml(item.title)}" />
+          </div>
+          <div class="admin-card-title">${escapeHtml(item.title)}</div>
+          <div class="admin-card-date">${escapeHtml(formatDateOnly(item.created_at))}</div>
+          <div class="admin-card-created">${escapeHtml(formatTimeOnly(item.created_at))}</div>
+
+          <div class="admin-card-actions">
+            <a class="folder-btn" href="${escapeHtml(item.target_url)}" target="_blank" rel="noopener noreferrer">View Folder</a>
+            <button class="btn-danger" onclick="deleteItem(${item.id})">Delete</button>
+          </div>
+        </article>
+      `).join('') : `<div class="empty-state">No items uploaded yet.</div>`;
+    }
+
+    async function deleteItem(id) {
+      if (!confirm('Delete this item?')) return;
+      const res = await fetch('/api/items/' + id, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) loadItems();
+    }
+
+    window.deleteItem = deleteItem;
+
+    async function loadUsers() {
+      const res = await fetch('/api/admin/users');
+      const users = await res.json();
+
+      usersGrid.innerHTML = users.length ? users.map(user => `
+        <div class="user-card">
+          <div>
+            <strong>${escapeHtml(user.username)}</strong>
+            <div class="muted-small">Joined ${escapeHtml(formatDateOnly(user.created_at))}</div>
+          </div>
+          <div class="user-actions">
+            <span class="${user.is_vip ? 'vip-badge' : 'normal-badge'}">${user.is_vip ? 'VIP' : 'USER'}</span>
+            <button class="solid-link" onclick="toggleVip(${user.id})">${user.is_vip ? 'Remove VIP' : 'Make VIP'}</button>
+          </div>
+        </div>
+      `).join('') : `<div class="empty-state">No users yet.</div>`;
+    }
+
+    async function toggleVip(id) {
+      const res = await fetch('/api/admin/users/' + id + '/vip', { method: 'PATCH' });
+      const data = await res.json();
+      if (data.success) loadUsers();
+    }
+
+    window.toggleVip = toggleVip;
+
+    async function loadStats() {
+      const res = await fetch('/api/admin/stats');
+      const stats = await res.json();
+
+      statsGrid.innerHTML = `
+        <div class="stat-box"><span>Total Users</span><strong>${stats.totalUsers}</strong></div>
+        <div class="stat-box"><span>VIP Users</span><strong>${stats.totalVipUsers}</strong></div>
+        <div class="stat-box"><span>Total Posts</span><strong>${stats.totalItems}</strong></div>
+        <div class="stat-box"><span>Total Visits</span><strong>${stats.totalVisits}</strong></div>
+      `;
+
+      visitsTableWrap.innerHTML = `
+        <table class="visits-table">
+          <thead>
+            <tr>
+              <th>IP</th>
+              <th>Country</th>
+              <th>Visited</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${stats.latestVisits.map(v => `
+              <tr>
+                <td>${escapeHtml(v.ip || '-')}</td>
+                <td style="font-size:20px;">${escapeHtml(v.flag || '🌍')}</td>
+                <td>${escapeHtml(formatDateTimeLocal(v.created_at))}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Posting...';
+      statusBox.textContent = '';
+      statusBox.className = 'status';
+
+      try {
+        const formData = new FormData();
+        formData.append('title', document.getElementById('title').value.trim());
+        formData.append('target', document.getElementById('target').value.trim());
+        formData.append('imageUrl', imageUrlInput.value.trim());
+
+        if (imageFileInput.files[0]) {
+          formData.append('imageFile', imageFileInput.files[0]);
+        }
+
+        const res = await fetch('/api/items', {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to post item.');
+        }
+
+        form.reset();
+        previewBox.innerHTML = '';
+        statusBox.textContent = 'Item posted successfully.';
+        statusBox.className = 'status success';
+
+        await loadItems();
+        await loadStats();
+      } catch (error) {
+        statusBox.textContent = error.message || 'Something went wrong.';
+        statusBox.className = 'status error';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Post Item';
+      }
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/admin/logout', { method: 'POST' });
+      window.location.href = '/admin-login';
+    });
+
+    (async () => {
+      await loadItems();
+      await loadUsers();
+      await loadStats();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="auth-page">
+    <section class="auth-card">
+      <div class="hero-kicker">Admin Access</div>
+      <h1>Admin Login</h1>
+      <p>Enter the admin password to continue.</p>
+
+      <form id="adminLoginForm" class="auth-form">
+        <input class="input" id="password" type="password" placeholder="Password" required />
+        <button class="solid-link full-btn" type="submit">Login</button>
+      </form>
+
+      <div id="status" class="status"></div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('adminLoginForm');
+    const statusBox = document.getElementById('status');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: document.getElementById('password').value })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        statusBox.textContent = data.error || 'Login failed.';
+        statusBox.className = 'status error';
+        return;
+      }
+
+      window.location.href = '/admin';
+    });
+  </script>
+</body>
+</html>

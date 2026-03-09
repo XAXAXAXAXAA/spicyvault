@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Create Account</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="auth-page">
+    <section class="auth-card">
+      <div class="hero-kicker">Create account</div>
+      <h1>Register</h1>
+      <p>Create a new user account.</p>
+
+      <form id="registerForm" class="auth-form">
+        <input class="input" id="username" type="text" placeholder="Username" required />
+        <input class="input" id="password" type="password" placeholder="Password" required />
+        <button class="solid-link full-btn" type="submit">Register</button>
+      </form>
+
+      <div id="status" class="status"></div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('registerForm');
+    const statusBox = document.getElementById('status');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const res = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: document.getElementById('password').value
+        })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        statusBox.textContent = data.error || 'Register failed.';
+        statusBox.className = 'status error';
+        return;
+      }
+
+      window.location.href = '/';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spicy Vault 🍭</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand-wrap">
+        <div class="brand-badge">🍭</div>
+        <div class="brand-copy">
+          <div class="brand-kicker">PRIVATE FOLDER LIBRARY</div>
+          <h1>Spicy Vault</h1>
+        </div>
+      </div>
+
+      <div class="header-tools">
+        <input id="searchInput" class="search-input" type="text" placeholder="Search folders..." />
+
+        <div id="guestLinks" class="header-tools">
+          <a class="ghost-link" href="/login">Login</a>
+          <a class="solid-link" href="/register">Register</a>
+        </div>
+
+        <div id="userBox" class="user-topbar" style="display:none;">
+          <div class="user-pill">
+            Logged in as <strong id="topUsername"></strong>
+            <span id="topVipBadge" class="vip-mini-badge" style="display:none;">VIP</span>
+          </div>
+          <button id="logoutBtn" class="ghost-link" type="button">Logout</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <div class="container">
+      <section class="hero-panel">
+        <div class="hero-left">
+          <div class="hero-kicker">Members area</div>
+          <h2>Spicy Vault 🍭</h2>
+          <p>Browse uploaded folders in a clean premium layout.</p>
+          <p>
+            <a
+              href="https://discord.gg/spicyvault"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="ghost-link"
+              style="margin-top: 8px;"
+            >💬 Join our Discord: discord.gg/spicyvault</a>
+          </p>
+          <p>Free users must complete the ad before accessing the content.</p>
+          <p>Premium is available on Discord, and premium users do not need to watch any ads.</p>
+        </div>
+
+        <div class="hero-stats">
+          <div class="stat-box">
+            <span>Total Posts</span>
+            <strong id="postCount">0</strong>
+          </div>
+          <div class="stat-box">
+            <span>Your Access</span>
+            <strong id="accessType">Guest</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="content-panel">
+        <div id="cards" class="cards-grid"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const cards = document.getElementById('cards');
+    const searchInput = document.getElementById('searchInput');
+    const postCount = document.getElementById('postCount');
+    const accessType = document.getElementById('accessType');
+    const guestLinks = document.getElementById('guestLinks');
+    const userBox = document.getElementById('userBox');
+    const topUsername = document.getElementById('topUsername');
+    const topVipBadge = document.getElementById('topVipBadge');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    let items = [];
+    let me = { loggedIn: false, isVip: false, username: null };
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function formatDate(dateString) {
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return '';
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${day}.${month}.${year}`;
+    }
+
+    function formatTime(dateString) {
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return '';
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
+
+    function getItemLink(item) {
+      if (me.loggedIn && me.isVip) return item.target_url;
+      return item.lockr_url || item.target_url;
+    }
+
+    function updateTopbar() {
+      accessType.textContent = me.loggedIn ? (me.isVip ? 'VIP' : 'User') : 'Guest';
+
+      if (me.loggedIn) {
+        guestLinks.style.display = 'none';
+        userBox.style.display = 'flex';
+        topUsername.textContent = me.username || 'User';
+        topVipBadge.style.display = me.isVip ? 'inline-flex' : 'none';
+      } else {
+        guestLinks.style.display = 'flex';
+        userBox.style.display = 'none';
+      }
+    }
+
+    function render(list) {
+      postCount.textContent = list.length;
+
+      if (!list.length) {
+        cards.innerHTML = `<div class="empty-state">No uploaded items yet.</div>`;
+        return;
+      }
+
+      cards.innerHTML = list.map(item => `
+        <article class="folder-card">
+          <div class="folder-image-wrap">
+            <img
+              class="folder-image"
+              src="${escapeHtml(item.image_url || 'https://via.placeholder.com/320x520?text=No+Image')}"
+              alt="${escapeHtml(item.title)}"
+              loading="lazy"
+            />
+          </div>
+
+          <h3 class="folder-title">${escapeHtml(item.title)}</h3>
+          <div class="folder-date">${escapeHtml(formatDate(item.created_at))}</div>
+          <div class="folder-time">${escapeHtml(formatTime(item.created_at))}</div>
+
+          <div class="folder-actions">
+            <a class="folder-btn" href="${escapeHtml(getItemLink(item))}" target="_blank" rel="noopener noreferrer">
+              View Folder
+            </a>
+          </div>
+        </article>
+      `).join('');
+    }
+
+    function applySearch() {
+      const q = searchInput.value.trim().toLowerCase();
+      if (!q) return render(items);
+
+      const filtered = items.filter(item =>
+        (item.title || '').toLowerCase().includes(q)
+      );
+
+      render(filtered);
+    }
+
+    async function loadMe() {
+      const res = await fetch('/api/me');
+      me = await res.json();
+      updateTopbar();
+    }
+
+    async function loadItems() {
+      const res = await fetch('/api/items');
+      items = await res.json();
+      render(items);
+    }
+
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.reload();
+    });
+
+    searchInput.addEventListener('input', applySearch);
+
+    (async () => {
+      await loadMe();
+      await loadItems();
+    })();
+  </script>
+</body>
+</html>

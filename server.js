@@ -1,0 +1,576 @@
+const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const sqlite3 = require('sqlite3').verbose();
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
+const geoip = require('geoip-lite');
+
+const app = express();
+const PORT = 3001;
+
+const ADMIN_PASSWORD = 'lozinka123';
+
+// TEST LOCKR API
+const LOCKR_API_URL = 'https://lockr.so/api/v1/lockers';
+const LOCKR_SECRET_API_KEY = '0383d1e4a1f19d41745041748f3fc971a228c72065';
+
+const DB_PATH = path.join(__dirname, 'spicyvault.db');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const PUBLIC_DIR = path.join(__dirname, 'public');
+
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+const db = new sqlite3.Database(DB_PATH);
+
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      target_url TEXT NOT NULL,
+      lockr_url TEXT,
+      image_url TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      is_vip INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS visits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ip TEXT,
+      country_code TEXT,
+      user_agent TEXT,
+      browser TEXT,
+      path TEXT,
+      referer TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+});
+
+function run(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+}
+
+function get(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
+function all(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+}
+
+function detectBrowser(userAgent = '') {
+  const ua = userAgent.toLowerCase();
+
+  if (ua.includes('edg')) return 'Edge';
+  if (ua.includes('opr') || ua.includes('opera')) return 'Opera';
+  if (ua.includes('chrome')) return 'Chrome';
+  if (ua.includes('firefox')) return 'Firefox';
+  if (ua.includes('safari') && !ua.includes('chrome')) return 'Safari';
+
+  return 'Unknown';
+}
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return req.socket.remoteAddress || '';
+}
+
+function getCountryCodeFromIp(ip) {
+  try {
+    if (!ip) return '';
+
+    const cleanedIp = ip.replace('::ffff:', '');
+
+    if (
+      cleanedIp === '127.0.0.1' ||
+      cleanedIp === '::1' ||
+      cleanedIp.startsWith('192.168.') ||
+      cleanedIp.startsWith('10.') ||
+      cleanedIp.startsWith('172.')
+    ) {
+      return 'LOCAL';
+    }
+
+    const geo = geoip.lookup(cleanedIp);
+    return geo?.country || '';
+  } catch {
+    return '';
+  }
+}
+
+function countryCodeToFlagEmoji(code) {
+  if (!code || code === 'LOCAL') return '🏠';
+
+  return code
+    .toUpperCase()
+    .replace(/./g, char => String.fromCodePoint(127397 + char.charCodeAt()));
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
+    const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    cb(null, filename);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024
+  },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPG, PNG, WEBP and GIF files are allowed.'));
+    }
+  }
+});
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use(session({
+  secret: 'spicyvault_secret_key_demo_change_this',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: false,
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  }
+}));
+
+app.use('/uploads', express.static(UPLOADS_DIR));
+app.use(express.static(PUBLIC_DIR));
+
+app.use(async (req, res, next) => {
+  try {
+    const skip =
+      req.path.startsWith('/uploads/') ||
+      req.path === '/favicon.ico' ||
+      req.path.endsWith('.css') ||
+      req.path.endsWith('.js') ||
+      req.path.endsWith('.png') ||
+      req.path.endsWith('.jpg') ||
+      req.path.endsWith('.jpeg') ||
+      req.path.endsWith('.webp') ||
+      req.path.endsWith('.gif');
+
+    if (!skip) {
+      const ip = getClientIp(req);
+      const countryCode = getCountryCodeFromIp(ip);
+
+      await run(
+        `INSERT INTO visits (ip, country_code, user_agent, browser, path, referer, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          ip,
+          countryCode,
+          req.headers['user-agent'] || '',
+          detectBrowser(req.headers['user-agent'] || ''),
+          req.path,
+          req.headers['referer'] || '',
+          new Date().toISOString()
+        ]
+      );
+    }
+  } catch (error) {
+    console.error('Visit log error:', error.message);
+  }
+
+  next();
+});
+
+function requireAdmin(req, res, next) {
+  if (!req.session.isAdmin) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+function requireUser(req, res, next) {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+app.get('/', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
+
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'login.html'));
+});
+
+app.get('/register', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'register.html'));
+});
+
+app.get('/admin-login', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'admin-login.html'));
+});
+
+app.get('/admin', (req, res) => {
+  if (!req.session.isAdmin) {
+    return res.redirect('/admin-login');
+  }
+
+  res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
+});
+
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Wrong password.' });
+  }
+
+  req.session.isAdmin = true;
+  res.json({ success: true });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true });
+  });
+});
+
+app.post('/api/register', async (req, res) => {
+  try {
+    const username = (req.body.username || '').trim();
+    const password = req.body.password || '';
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required.' });
+    }
+
+    const existing = await get('SELECT * FROM users WHERE username = ?', [username]);
+    if (existing) {
+      return res.status(400).json({ error: 'Username already exists.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const result = await run(
+      'INSERT INTO users (username, password_hash, is_vip, created_at) VALUES (?, ?, 0, ?)',
+      [username, passwordHash, new Date().toISOString()]
+    );
+
+    req.session.userId = result.lastID;
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Register error:', error);
+    res.status(500).json({ error: 'Register failed.' });
+  }
+});
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const username = (req.body.username || '').trim();
+    const password = req.body.password || '';
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required.' });
+    }
+
+    const user = await get('SELECT * FROM users WHERE username = ?', [username]);
+
+    if (!user) {
+      return res.status(401).json({ error: 'Wrong username or password.' });
+    }
+
+    const ok = await bcrypt.compare(password, user.password_hash);
+
+    if (!ok) {
+      return res.status(401).json({ error: 'Wrong username or password.' });
+    }
+
+    req.session.userId = user.id;
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Login failed.' });
+  }
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true });
+  });
+});
+
+app.get('/api/me', async (req, res) => {
+  try {
+    if (!req.session.userId) {
+      return res.json({
+        loggedIn: false,
+        username: null,
+        isVip: false
+      });
+    }
+
+    const user = await get(
+      'SELECT id, username, is_vip FROM users WHERE id = ?',
+      [req.session.userId]
+    );
+
+    if (!user) {
+      return res.json({
+        loggedIn: false,
+        username: null,
+        isVip: false
+      });
+    }
+
+    res.json({
+      loggedIn: true,
+      username: user.username,
+      isVip: !!user.is_vip
+    });
+  } catch (error) {
+    console.error('Me error:', error);
+    res.json({
+      loggedIn: false,
+      username: null,
+      isVip: false
+    });
+  }
+});
+
+app.get('/api/items', async (req, res) => {
+  try {
+    const items = await all('SELECT * FROM items ORDER BY id DESC');
+    res.json(items);
+  } catch (error) {
+    console.error('Load items error:', error);
+    res.status(500).json({ error: 'Failed to load items.' });
+  }
+});
+
+app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res) => {
+  try {
+    const title = (req.body.title || '').trim();
+    const target = (req.body.target || '').trim();
+    const imageUrl = (req.body.imageUrl || '').trim();
+
+    if (!title || !target) {
+      return res.status(400).json({ error: 'Title and target URL are required.' });
+    }
+
+    let parsedTarget;
+    try {
+      parsedTarget = new URL(target);
+    } catch {
+      return res.status(400).json({ error: 'Invalid target URL.' });
+    }
+
+    let finalImage = '';
+
+    if (req.file) {
+      finalImage = `/uploads/${req.file.filename}`;
+    } else if (imageUrl) {
+      try {
+        finalImage = new URL(imageUrl).toString();
+      } catch {
+        return res.status(400).json({ error: 'Invalid image URL.' });
+      }
+    }
+
+    const payload = {
+      title,
+      target: parsedTarget.toString()
+    };
+
+    const lockrResponse = await fetch(LOCKR_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${LOCKR_SECRET_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const lockrResult = await lockrResponse.json().catch(() => null);
+
+    if (!lockrResponse.ok) {
+      return res.status(lockrResponse.status).json({
+        error: lockrResult?.message || lockrResult?.error || 'Failed to create locker.'
+      });
+    }
+
+    const lockrUrl =
+      lockrResult?.url ||
+      lockrResult?.link ||
+      lockrResult?.short_url ||
+      lockrResult?.locker_url ||
+      lockrResult?.data?.url ||
+      lockrResult?.data?.link ||
+      lockrResult?.data?.short_url ||
+      parsedTarget.toString();
+
+    const createdAt = new Date().toISOString();
+
+    await run(
+      `INSERT INTO items (title, target_url, lockr_url, image_url, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [title, parsedTarget.toString(), lockrUrl, finalImage, createdAt]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Create item error:', error);
+    res.status(500).json({ error: error.message || 'Internal server error.' });
+  }
+});
+
+app.delete('/api/items/:id', requireAdmin, async (req, res) => {
+  try {
+    const item = await get('SELECT * FROM items WHERE id = ?', [req.params.id]);
+
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found.' });
+    }
+
+    if (item.image_url && item.image_url.startsWith('/uploads/')) {
+      const filePath = path.join(__dirname, item.image_url);
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (error) {
+          console.error('Delete image error:', error.message);
+        }
+      }
+    }
+
+    await run('DELETE FROM items WHERE id = ?', [req.params.id]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete item error:', error);
+    res.status(500).json({ error: 'Delete failed.' });
+  }
+});
+
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const users = await all(
+      'SELECT id, username, is_vip, created_at FROM users ORDER BY id DESC'
+    );
+    res.json(users);
+  } catch (error) {
+    console.error('Load users error:', error);
+    res.status(500).json({ error: 'Failed to load users.' });
+  }
+});
+
+app.patch('/api/admin/users/:id/vip', requireAdmin, async (req, res) => {
+  try {
+    const user = await get('SELECT * FROM users WHERE id = ?', [req.params.id]);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const nextVip = user.is_vip ? 0 : 1;
+
+    await run('UPDATE users SET is_vip = ? WHERE id = ?', [nextVip, req.params.id]);
+
+    res.json({
+      success: true,
+      isVip: !!nextVip
+    });
+  } catch (error) {
+    console.error('Toggle VIP error:', error);
+    res.status(500).json({ error: 'Failed to update VIP.' });
+  }
+});
+
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  try {
+    const totalUsers = await get('SELECT COUNT(*) as count FROM users');
+    const totalVipUsers = await get('SELECT COUNT(*) as count FROM users WHERE is_vip = 1');
+    const totalItems = await get('SELECT COUNT(*) as count FROM items');
+    const totalVisits = await get('SELECT COUNT(*) as count FROM visits');
+
+    const latestVisitsRaw = await all(`
+      SELECT ip, country_code, created_at
+      FROM visits
+      ORDER BY id DESC
+      LIMIT 20
+    `);
+
+    const latestVisits = latestVisitsRaw.map(v => ({
+      ip: v.ip,
+      country_code: v.country_code,
+      flag: countryCodeToFlagEmoji(v.country_code),
+      created_at: v.created_at
+    }));
+
+    res.json({
+      totalUsers: totalUsers.count,
+      totalVipUsers: totalVipUsers.count,
+      totalItems: totalItems.count,
+      totalVisits: totalVisits.count,
+      latestVisits
+    });
+  } catch (error) {
+    console.error('Stats error:', error);
+    res.status(500).json({ error: 'Failed to load stats.' });
+  }
+});
+
+app.get('/api/protected', requireUser, (req, res) => {
+  res.json({ success: true });
+});
+
+app.use((err, req, res, next) => {
+  console.error('Global error:', err);
+  res.status(400).json({
+    error: err.message || 'Upload error.'
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://127.0.0.1:${PORT}`);
+});
