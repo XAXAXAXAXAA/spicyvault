@@ -54,6 +54,18 @@
           </p>
           <p>Free users must complete the ad before accessing the content.</p>
           <p>Premium is available on Discord, and premium users do not need to watch any ads.</p>
+
+          <div id="paypalMessage" class="status" style="margin-top:12px;"></div>
+
+          <div id="vipPlansLoggedOut" class="actions" style="display:none;">
+            <a class="solid-link" href="/login">Login to buy VIP</a>
+          </div>
+
+          <div id="vipPlansLoggedIn" class="actions" style="display:none;">
+            <a class="solid-link" href="/api/paypal/start/week">Buy VIP 1 Week (€5)</a>
+            <a class="solid-link" href="/api/paypal/start/month">Buy VIP 1 Month (€15)</a>
+            <a class="solid-link" href="/api/paypal/start/lifetime">Buy VIP Lifetime (€25)</a>
+          </div>
         </div>
 
         <div class="hero-stats">
@@ -84,6 +96,9 @@
     const topUsername = document.getElementById('topUsername');
     const topVipBadge = document.getElementById('topVipBadge');
     const logoutBtn = document.getElementById('logoutBtn');
+    const vipPlansLoggedOut = document.getElementById('vipPlansLoggedOut');
+    const vipPlansLoggedIn = document.getElementById('vipPlansLoggedIn');
+    const paypalMessage = document.getElementById('paypalMessage');
 
     let items = [];
     let me = { loggedIn: false, isVip: false, username: null };
@@ -119,6 +134,28 @@
       return item.lockr_url || item.target_url;
     }
 
+    function updatePayPalMessage() {
+      const params = new URLSearchParams(window.location.search);
+      const paypal = params.get('paypal');
+
+      if (paypal === 'success') {
+        paypalMessage.textContent = 'VIP activated successfully.';
+        paypalMessage.className = 'status success';
+      } else if (paypal === 'cancel') {
+        paypalMessage.textContent = 'Payment was canceled.';
+        paypalMessage.className = 'status error';
+      } else if (paypal === 'error') {
+        paypalMessage.textContent = 'Payment error. Please try again.';
+        paypalMessage.className = 'status error';
+      } else if (paypal === 'notfound' || paypal === 'missing') {
+        paypalMessage.textContent = 'Payment could not be verified.';
+        paypalMessage.className = 'status error';
+      } else {
+        paypalMessage.textContent = '';
+        paypalMessage.className = 'status';
+      }
+    }
+
     function updateTopbar() {
       accessType.textContent = me.loggedIn ? (me.isVip ? 'VIP' : 'User') : 'Guest';
 
@@ -127,9 +164,13 @@
         userBox.style.display = 'flex';
         topUsername.textContent = me.username || 'User';
         topVipBadge.style.display = me.isVip ? 'inline-flex' : 'none';
+        vipPlansLoggedOut.style.display = 'none';
+        vipPlansLoggedIn.style.display = me.isVip ? 'none' : 'flex';
       } else {
         guestLinks.style.display = 'flex';
         userBox.style.display = 'none';
+        vipPlansLoggedOut.style.display = 'flex';
+        vipPlansLoggedIn.style.display = 'none';
       }
     }
 
@@ -196,6 +237,7 @@
     searchInput.addEventListener('input', applySearch);
 
     (async () => {
+      updatePayPalMessage();
       await loadMe();
       await loadItems();
     })();
