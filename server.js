@@ -742,9 +742,9 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
     }
 
     const payload = {
-      title,
-      target: parsedTarget.toString()
-    };
+  title,
+  url: parsedTarget.toString()
+};
 
     const lockrResponse = await fetchFn(LOCKR_API_URL, {
       method: 'POST',
@@ -906,3 +906,4 @@ app.listen(PORT, () => {
     hasClientSecret: !!PAYPAL_CLIENT_SECRET
   });
 });
+
