@@ -152,12 +152,16 @@
     }
 
     imageFileInput.addEventListener('change', () => {
-      if (imageFileInput.files[0]) showPreviewFromFile(imageFileInput.files[0]);
+      if (imageFileInput.files[0]) {
+        showPreviewFromFile(imageFileInput.files[0]);
+      }
     });
 
     imageUrlInput.addEventListener('input', () => {
       if (!imageFileInput.files.length && imageUrlInput.value.trim()) {
         previewBox.innerHTML = `<img src="${escapeHtml(imageUrlInput.value.trim())}" alt="Preview">`;
+      } else if (!imageUrlInput.value.trim() && !imageFileInput.files.length) {
+        previewBox.innerHTML = '';
       }
     });
 
@@ -182,9 +186,22 @@
       showPreviewFromFile(file);
     });
 
+    async function safeJson(res) {
+      try {
+        return await res.json();
+      } catch {
+        return {};
+      }
+    }
+
     async function loadItems() {
       const res = await fetch('/api/items');
-      const items = await res.json();
+      const items = await safeJson(res);
+
+      if (!Array.isArray(items)) {
+        adminCards.innerHTML = `<div class="empty-state">Failed to load items.</div>`;
+        return;
+      }
 
       adminCards.innerHTML = items.length ? items.map(item => `
         <article class="admin-card">
@@ -206,15 +223,23 @@
     async function deleteItem(id) {
       if (!confirm('Delete this item?')) return;
       const res = await fetch('/api/items/' + id, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) loadItems();
+      const data = await safeJson(res);
+      if (data.success) {
+        await loadItems();
+        await loadStats();
+      }
     }
 
     window.deleteItem = deleteItem;
 
     async function loadUsers() {
       const res = await fetch('/api/admin/users');
-      const users = await res.json();
+      const users = await safeJson(res);
+
+      if (!Array.isArray(users)) {
+        usersGrid.innerHTML = `<div class="empty-state">Failed to load users.</div>`;
+        return;
+      }
 
       usersGrid.innerHTML = users.length ? users.map(user => `
         <div class="user-card">
@@ -232,21 +257,30 @@
 
     async function toggleVip(id) {
       const res = await fetch('/api/admin/users/' + id + '/vip', { method: 'PATCH' });
-      const data = await res.json();
-      if (data.success) loadUsers();
+      const data = await safeJson(res);
+      if (data.success) {
+        await loadUsers();
+        await loadStats();
+      }
     }
 
     window.toggleVip = toggleVip;
 
     async function loadStats() {
       const res = await fetch('/api/admin/stats');
-      const stats = await res.json();
+      const stats = await safeJson(res);
+
+      const totalUsers = Number(stats.totalUsers) || 0;
+      const totalVipUsers = Number(stats.totalVipUsers) || 0;
+      const totalItems = Number(stats.totalItems) || 0;
+      const totalVisits = Number(stats.totalVisits) || 0;
+      const latestVisits = Array.isArray(stats.latestVisits) ? stats.latestVisits : [];
 
       statsGrid.innerHTML = `
-        <div class="stat-box"><span>Total Users</span><strong>${stats.totalUsers}</strong></div>
-        <div class="stat-box"><span>VIP Users</span><strong>${stats.totalVipUsers}</strong></div>
-        <div class="stat-box"><span>Total Posts</span><strong>${stats.totalItems}</strong></div>
-        <div class="stat-box"><span>Total Visits</span><strong>${stats.totalVisits}</strong></div>
+        <div class="stat-box"><span>Total Users</span><strong>${totalUsers}</strong></div>
+        <div class="stat-box"><span>VIP Users</span><strong>${totalVipUsers}</strong></div>
+        <div class="stat-box"><span>Total Posts</span><strong>${totalItems}</strong></div>
+        <div class="stat-box"><span>Total Visits</span><strong>${totalVisits}</strong></div>
       `;
 
       visitsTableWrap.innerHTML = `
@@ -259,13 +293,17 @@
             </tr>
           </thead>
           <tbody>
-            ${stats.latestVisits.map(v => `
+            ${latestVisits.length ? latestVisits.map(v => `
               <tr>
                 <td>${escapeHtml(v.ip || '-')}</td>
                 <td style="font-size:20px;">${escapeHtml(v.flag || '🌍')}</td>
                 <td>${escapeHtml(formatDateTimeLocal(v.created_at))}</td>
               </tr>
-            `).join('')}
+            `).join('') : `
+              <tr>
+                <td colspan="3">No visits yet.</td>
+              </tr>
+            `}
           </tbody>
         </table>
       `;
@@ -294,7 +332,7 @@
           body: formData
         });
 
-        const data = await res.json();
+        const data = await safeJson(res);
 
         if (!res.ok) {
           throw new Error(data.error || 'Failed to post item.');
