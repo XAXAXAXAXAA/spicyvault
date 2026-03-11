@@ -1,8 +1,6 @@
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
-const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const geoip = require('geoip-lite');
@@ -18,114 +16,177 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', 1);
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'lozinka123';
-
-// LOCKR
-const LOCKR_API_URL = 'https://lockr.so/api/v1/lockers';
-const LOCKR_SECRET_API_KEY =
-  process.env.LOCKR_SECRET_API_KEY ||
-  'CHANGE_ME';
-
-// PAYPAL
-const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
-const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
-const PAYPAL_ENV = process.env.PAYPAL_ENV || 'sandbox'; // sandbox or live
-
-const PAYPAL_BASE_URL =
-  PAYPAL_ENV === 'live'
-    ? 'https://api-m.paypal.com'
-    : 'https://api-m.sandbox.paypal.com';
-
 const SESSION_SECRET =
   process.env.SESSION_SECRET || 'spicyvault_secret_key_demo_change_this';
-
 const APP_BASE_URL =
   process.env.APP_BASE_URL || `http://127.0.0.1:${PORT}`;
 
-const DB_PATH = path.join(__dirname, 'spicyvault.db');
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const LOCKR_API_URL = 'https://lockr.so/api/v1/lockers';
+const LOCKR_SECRET_API_KEY = process.env.LOCKR_SECRET_API_KEY || 'CHANGE_ME';
+
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_OWNER = process.env.GITHUB_OWNER || '';
+const GITHUB_REPO = process.env.GITHUB_REPO || '';
+const GITHUB_BRANCH = process.env.GITHUB_BRANCH || 'main';
+
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const DATA_FILES = {
+  items: 'data/items.json',
+  users: 'data/users.json',
+  visits: 'data/visits.json'
+};
+
+let writeQueue = Promise.resolve();
+
+function enqueueWrite(task) {
+  const run = writeQueue.then(task, task);
+  writeQueue = run.catch(() => {});
+  return run;
 }
 
-const db = new sqlite3.Database(DB_PATH);
+function ensureGitHubConfig() {
+  if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
+    throw new Error('Missing GITHUB_TOKEN, GITHUB_OWNER or GITHUB_REPO.');
+  }
+}
 
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      target_url TEXT NOT NULL,
-      lockr_url TEXT,
-      image_url TEXT,
-      created_at TEXT NOT NULL
-    )
-  `);
+function githubApiUrl(filePath) {
+  return `https://api.github.com/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(GITHUB_REPO)}/contents/${filePath}`;
+}
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      is_vip INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL
-    )
-  `);
+async function githubRequest(url, options = {}) {
+  ensureGitHubConfig();
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS visits (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ip TEXT,
-      country_code TEXT,
-      user_agent TEXT,
-      browser TEXT,
-      path TEXT,
-      referer TEXT,
-      created_at TEXT NOT NULL
-    )
-  `);
+  const response = await fetchFn(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(options.headers || {})
+    }
+  });
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS vip_orders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      paypal_order_id TEXT NOT NULL UNIQUE,
-      plan TEXT NOT NULL,
-      amount TEXT NOT NULL,
-      currency TEXT NOT NULL,
-      status TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `);
-});
+  return response;
+}
 
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
+async function parseJsonSafe(response) {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { raw: text };
+  }
+}
+
+async function readRepoFile(filePath, fallbackValue) {
+  const response = await githubRequest(
+    `${githubApiUrl(filePath)}?ref=${encodeURIComponent(GITHUB_BRANCH)}`
+  );
+
+  if (response.status === 404) {
+    return {
+      exists: false,
+      sha: null,
+      data: fallbackValue,
+      base64: null
+    };
+  }
+
+  const payload = await parseJsonSafe(response);
+
+  if (!response.ok) {
+    throw new Error(payload.message || `Failed to read ${filePath} from GitHub.`);
+  }
+
+  const base64 = (payload.content || '').replace(/\n/g, '');
+  const content = Buffer.from(base64, 'base64').toString('utf8');
+
+  return {
+    exists: true,
+    sha: payload.sha,
+    data: content,
+    base64
+  };
+}
+
+async function writeRepoFile(filePath, rawContent, message) {
+  return enqueueWrite(async () => {
+    const existing = await readRepoFile(filePath, null);
+    const contentBase64 = Buffer.isBuffer(rawContent)
+      ? rawContent.toString('base64')
+      : Buffer.from(String(rawContent), 'utf8').toString('base64');
+
+    const response = await githubRequest(githubApiUrl(filePath), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message,
+        content: contentBase64,
+        branch: GITHUB_BRANCH,
+        ...(existing.sha ? { sha: existing.sha } : {})
+      })
     });
+
+    const payload = await parseJsonSafe(response);
+
+    if (!response.ok) {
+      throw new Error(payload.message || `Failed to write ${filePath} to GitHub.`);
+    }
+
+    return payload;
   });
 }
 
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
+async function deleteRepoFile(filePath, message) {
+  return enqueueWrite(async () => {
+    const existing = await readRepoFile(filePath, null);
+    if (!existing.exists || !existing.sha) return;
+
+    const response = await githubRequest(githubApiUrl(filePath), {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message,
+        sha: existing.sha,
+        branch: GITHUB_BRANCH
+      })
     });
+
+    const payload = await parseJsonSafe(response);
+
+    if (!response.ok) {
+      throw new Error(payload.message || `Failed to delete ${filePath} from GitHub.`);
+    }
   });
 }
 
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+async function readJsonFile(filePath, fallbackValue) {
+  const result = await readRepoFile(filePath, null);
+
+  if (!result.exists) {
+    await writeRepoFile(
+      filePath,
+      JSON.stringify(fallbackValue, null, 2),
+      `Initialize ${filePath}`
+    );
+    return fallbackValue;
+  }
+
+  try {
+    return JSON.parse(result.data || 'null') ?? fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
+}
+
+async function writeJsonFile(filePath, data, message) {
+  await writeRepoFile(filePath, JSON.stringify(data, null, 2), message);
 }
 
 function detectBrowser(userAgent = '') {
@@ -176,204 +237,16 @@ function countryCodeToFlagEmoji(code) {
     .replace(/./g, char => String.fromCodePoint(127397 + char.charCodeAt()));
 }
 
-function getPlanConfig(plan) {
-  const plans = {
-    week: { label: 'VIP 1 WEEK', value: '5.00', currency: 'EUR' },
-    month: { label: 'VIP 1 MONTH', value: '15.00', currency: 'EUR' },
-    lifetime: { label: 'VIP LIFETIME', value: '25.00', currency: 'EUR' }
-  };
-
-  return plans[plan] || null;
-}
-
 function getSessionCookieSecure() {
   return process.env.NODE_ENV === 'production';
 }
 
-async function parseJsonSafe(response) {
-  const text = await response.text();
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    return { raw: text };
-  }
+function nextId(list) {
+  return list.length ? Math.max(...list.map(item => Number(item.id) || 0)) + 1 : 1;
 }
-
-async function getPayPalAccessToken() {
-  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-    throw new Error('Missing PayPal credentials.');
-  }
-
-  const auth = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
-
-  const response = await fetchFn(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${auth}`,
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: 'grant_type=client_credentials'
-  });
-
-  const data = await parseJsonSafe(response);
-
-  if (!response.ok || !data.access_token) {
-    console.error('PayPal token error:', {
-      status: response.status,
-      statusText: response.statusText,
-      data
-    });
-    throw new Error('Failed to get PayPal access token.');
-  }
-
-  return data.access_token;
-}
-
-async function createPayPalOrder({ plan, userId }) {
-  const planConfig = getPlanConfig(plan);
-  if (!planConfig) {
-    throw new Error('Invalid VIP plan.');
-  }
-
-  const accessToken = await getPayPalAccessToken();
-
-  const response = await fetchFn(`${PAYPAL_BASE_URL}/v2/checkout/orders`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      Prefer: 'return=representation'
-    },
-    body: JSON.stringify({
-      intent: 'CAPTURE',
-      purchase_units: [
-        {
-          reference_id: `user_${userId}_${plan}`,
-          description: planConfig.label,
-          amount: {
-            currency_code: planConfig.currency,
-            value: planConfig.value
-          }
-        }
-      ],
-      application_context: {
-        brand_name: 'Spicy Vault',
-        landing_page: 'LOGIN',
-        user_action: 'PAY_NOW',
-        shipping_preference: 'NO_SHIPPING',
-        return_url: `${APP_BASE_URL}/?paypal=success`,
-        cancel_url: `${APP_BASE_URL}/?paypal=cancel`
-      }
-    })
-  });
-
-  const data = await parseJsonSafe(response);
-
-  if (!response.ok || !data.id) {
-    console.error('PayPal create order error:', {
-      status: response.status,
-      statusText: response.statusText,
-      data
-    });
-    throw new Error('Failed to create PayPal order.');
-  }
-
-  const approveLink = data.links?.find(link => link.rel === 'approve')?.href || null;
-  const now = new Date().toISOString();
-
-  await run(
-    `INSERT OR REPLACE INTO vip_orders
-      (user_id, paypal_order_id, plan, amount, currency, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      userId,
-      data.id,
-      plan,
-      planConfig.value,
-      planConfig.currency,
-      data.status || 'CREATED',
-      now,
-      now
-    ]
-  );
-
-  return {
-    orderId: data.id,
-    approveLink
-  };
-}
-
-async function capturePayPalOrder(orderId) {
-  const accessToken = await getPayPalAccessToken();
-
-  const response = await fetchFn(`${PAYPAL_BASE_URL}/v2/checkout/orders/${orderId}/capture`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      Prefer: 'return=representation'
-    }
-  });
-
-  const data = await parseJsonSafe(response);
-
-  if (!response.ok) {
-    console.error('PayPal capture error:', {
-      status: response.status,
-      statusText: response.statusText,
-      data
-    });
-    throw new Error('Failed to capture PayPal payment.');
-  }
-
-  return data;
-}
-
-function isPayPalOrderCompleted(orderData) {
-  if (!orderData) return false;
-
-  if (orderData.status === 'COMPLETED') {
-    return true;
-  }
-
-  const captures =
-    orderData.purchase_units?.flatMap(unit => unit.payments?.captures || []) || [];
-
-  return captures.some(capture => capture.status === 'COMPLETED');
-}
-
-async function upgradeUserVipFromOrder(orderId) {
-  const order = await get('SELECT * FROM vip_orders WHERE paypal_order_id = ?', [orderId]);
-
-  if (!order) {
-    throw new Error('VIP order not found.');
-  }
-
-  if (order.status === 'COMPLETED') {
-    return;
-  }
-
-  await run('UPDATE users SET is_vip = 1 WHERE id = ?', [order.user_id]);
-
-  await run(
-    'UPDATE vip_orders SET status = ?, updated_at = ? WHERE paypal_order_id = ?',
-    ['COMPLETED', new Date().toISOString(), orderId]
-  );
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
-    const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-    cb(null, filename);
-  }
-});
 
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024
   },
@@ -387,8 +260,8 @@ const upload = multer({
   }
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '12mb' }));
+app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
 app.use(session({
   secret: SESSION_SECRET,
@@ -403,38 +276,33 @@ app.use(session({
   }
 }));
 
-app.use('/uploads', express.static(UPLOADS_DIR));
 app.use(express.static(PUBLIC_DIR));
 
 app.use(async (req, res, next) => {
   try {
-    const skip =
-      req.path.startsWith('/uploads/') ||
-      req.path === '/favicon.ico' ||
-      req.path.endsWith('.css') ||
-      req.path.endsWith('.js') ||
-      req.path.endsWith('.png') ||
-      req.path.endsWith('.jpg') ||
-      req.path.endsWith('.jpeg') ||
-      req.path.endsWith('.webp') ||
-      req.path.endsWith('.gif');
+    const shouldLogVisit = ['/', '/login', '/register', '/admin', '/admin-login'].includes(req.path);
 
-    if (!skip) {
+    if (shouldLogVisit) {
+      const visits = await readJsonFile(DATA_FILES.visits, []);
       const ip = getClientIp(req);
       const countryCode = getCountryCodeFromIp(ip);
 
-      await run(
-        `INSERT INTO visits (ip, country_code, user_agent, browser, path, referer, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          ip,
-          countryCode,
-          req.headers['user-agent'] || '',
-          detectBrowser(req.headers['user-agent'] || ''),
-          req.path,
-          req.headers['referer'] || '',
-          new Date().toISOString()
-        ]
+      visits.push({
+        id: nextId(visits),
+        ip,
+        country_code: countryCode,
+        user_agent: req.headers['user-agent'] || '',
+        browser: detectBrowser(req.headers['user-agent'] || ''),
+        path: req.path,
+        referer: req.headers['referer'] || '',
+        created_at: new Date().toISOString()
+      });
+
+      const trimmed = visits.slice(-300);
+      await writeJsonFile(
+        DATA_FILES.visits,
+        trimmed,
+        `Update visits at ${new Date().toISOString()}`
       );
     }
   } catch (error) {
@@ -447,20 +315,6 @@ app.use(async (req, res, next) => {
 function requireAdmin(req, res, next) {
   if (!req.session.isAdmin) {
     return res.status(401).json({ error: 'Unauthorized' });
-  }
-  next();
-}
-
-function requireUserPage(req, res, next) {
-  if (!req.session.userId) {
-    return res.redirect('/login');
-  }
-  next();
-}
-
-function requireUserApi(req, res, next) {
-  if (!req.session.userId) {
-    return res.status(401).json({ error: 'Login required.' });
   }
   next();
 }
@@ -489,95 +343,31 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
 });
 
-app.get('/paypal-success', requireUserPage, (req, res) => {
-  res.redirect('/?paypal=success');
-});
-
-app.get('/api/paypal/config', (req, res) => {
-  res.json({
-    clientId: PAYPAL_CLIENT_ID || '',
-    currency: 'EUR',
-    env: PAYPAL_ENV
-  });
-});
-
-app.post('/api/paypal/create-order', requireUserApi, async (req, res) => {
+app.get('/api/uploads/:filename', async (req, res) => {
   try {
-    const plan = (req.body.plan || '').trim();
+    const filename = path.basename(req.params.filename);
+    const filePath = `data/uploads/${filename}`;
+    const file = await readRepoFile(filePath, null);
 
-    const result = await createPayPalOrder({
-      plan,
-      userId: req.session.userId
-    });
+    if (!file.exists) {
+      return res.status(404).send('Image not found.');
+    }
 
-    res.json({
-      orderID: result.orderId
-    });
+    const ext = path.extname(filename).toLowerCase();
+    const typeMap = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif'
+    };
+
+    res.setHeader('Content-Type', typeMap[ext] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(Buffer.from(file.base64 || '', 'base64'));
   } catch (error) {
-    console.error('PayPal create-order route error:', error);
-    res.status(500).json({
-      error: error.message || 'Failed to create order.'
-    });
-  }
-});
-
-app.post('/api/paypal/capture-order', requireUserApi, async (req, res) => {
-  try {
-    const orderId = (req.body.orderID || '').trim();
-
-    if (!orderId) {
-      return res.status(400).json({ error: 'Missing orderID.' });
-    }
-
-    const existing = await get(
-      'SELECT * FROM vip_orders WHERE paypal_order_id = ? AND user_id = ?',
-      [orderId, req.session.userId]
-    );
-
-    if (!existing) {
-      return res.status(404).json({ error: 'VIP order not found.' });
-    }
-
-    if (existing.status === 'COMPLETED') {
-      return res.json({ success: true, alreadyCompleted: true });
-    }
-
-    const captureData = await capturePayPalOrder(orderId);
-
-    if (!isPayPalOrderCompleted(captureData)) {
-      console.error('PayPal capture incomplete:', captureData);
-      return res.status(400).json({ error: 'Payment not completed.' });
-    }
-
-    await upgradeUserVipFromOrder(orderId);
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error('PayPal capture-order route error:', error);
-    res.status(500).json({
-      error: error.message || 'Failed to capture order.'
-    });
-  }
-});
-
-/* BACKWARD COMPATIBILITY FOR OLD LINKS */
-app.get('/api/paypal/start/:plan', requireUserPage, async (req, res) => {
-  try {
-    const plan = (req.params.plan || '').trim();
-
-    const result = await createPayPalOrder({
-      plan,
-      userId: req.session.userId
-    });
-
-    if (!result.approveLink) {
-      return res.redirect('/?paypal=error');
-    }
-
-    res.redirect(result.approveLink);
-  } catch (error) {
-    console.error('PayPal start compatibility route error:', error);
-    res.redirect('/?paypal=error');
+    console.error('Image proxy error:', error);
+    res.status(500).send('Failed to load image.');
   }
 });
 
@@ -607,20 +397,28 @@ app.post('/api/register', async (req, res) => {
       return res.status(400).json({ error: 'Username and password are required.' });
     }
 
-    const existing = await get('SELECT * FROM users WHERE username = ?', [username]);
+    const users = await readJsonFile(DATA_FILES.users, []);
+    const existing = users.find(
+      user => user.username.toLowerCase() === username.toLowerCase()
+    );
+
     if (existing) {
       return res.status(400).json({ error: 'Username already exists.' });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
+    const newUser = {
+      id: nextId(users),
+      username,
+      password_hash: passwordHash,
+      is_vip: 0,
+      created_at: new Date().toISOString()
+    };
 
-    const result = await run(
-      'INSERT INTO users (username, password_hash, is_vip, created_at) VALUES (?, ?, 0, ?)',
-      [username, passwordHash, new Date().toISOString()]
-    );
+    users.push(newUser);
+    await writeJsonFile(DATA_FILES.users, users, `Register user ${username}`);
 
-    req.session.userId = result.lastID;
-
+    req.session.userId = newUser.id;
     res.json({ success: true });
   } catch (error) {
     console.error('Register error:', error);
@@ -637,7 +435,10 @@ app.post('/api/login', async (req, res) => {
       return res.status(400).json({ error: 'Username and password are required.' });
     }
 
-    const user = await get('SELECT * FROM users WHERE username = ?', [username]);
+    const users = await readJsonFile(DATA_FILES.users, []);
+    const user = users.find(
+      u => u.username.toLowerCase() === username.toLowerCase()
+    );
 
     if (!user) {
       return res.status(401).json({ error: 'Wrong username or password.' });
@@ -650,7 +451,6 @@ app.post('/api/login', async (req, res) => {
     }
 
     req.session.userId = user.id;
-
     res.json({ success: true });
   } catch (error) {
     console.error('Login error:', error);
@@ -674,9 +474,9 @@ app.get('/api/me', async (req, res) => {
       });
     }
 
-    const user = await get(
-      'SELECT id, username, is_vip FROM users WHERE id = ?',
-      [req.session.userId]
+    const users = await readJsonFile(DATA_FILES.users, []);
+    const user = users.find(
+      u => Number(u.id) === Number(req.session.userId)
     );
 
     if (!user) {
@@ -704,7 +504,8 @@ app.get('/api/me', async (req, res) => {
 
 app.get('/api/items', async (req, res) => {
   try {
-    const items = await all('SELECT * FROM items ORDER BY id DESC');
+    const items = await readJsonFile(DATA_FILES.items, []);
+    items.sort((a, b) => Number(b.id) - Number(a.id));
     res.json(items);
   } catch (error) {
     console.error('Load items error:', error);
@@ -730,9 +531,19 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
     }
 
     let finalImage = '';
+    let uploadedFilename = null;
 
     if (req.file) {
-      finalImage = `/uploads/${req.file.filename}`;
+      const ext = path.extname(req.file.originalname || '').toLowerCase() || '.jpg';
+      uploadedFilename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+
+      await writeRepoFile(
+        `data/uploads/${uploadedFilename}`,
+        req.file.buffer,
+        `Upload image ${uploadedFilename}`
+      );
+
+      finalImage = `/api/uploads/${uploadedFilename}`;
     } else if (imageUrl) {
       try {
         finalImage = new URL(imageUrl).toString();
@@ -741,10 +552,14 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
       }
     }
 
+    if (!LOCKR_SECRET_API_KEY || LOCKR_SECRET_API_KEY === 'CHANGE_ME') {
+      return res.status(500).json({ error: 'Missing LOCKR_SECRET_API_KEY.' });
+    }
+
     const payload = {
-  title,
-  url: parsedTarget.toString()
-};
+      title,
+      url: parsedTarget.toString()
+    };
 
     const lockrResponse = await fetchFn(LOCKR_API_URL, {
       method: 'POST',
@@ -758,6 +573,23 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
     const lockrResult = await parseJsonSafe(lockrResponse);
 
     if (!lockrResponse.ok) {
+      if (uploadedFilename) {
+        try {
+          await deleteRepoFile(
+            `data/uploads/${uploadedFilename}`,
+            `Rollback image ${uploadedFilename}`
+          );
+        } catch (rollbackError) {
+          console.error('Upload rollback error:', rollbackError.message);
+        }
+      }
+
+      console.error('Lockr create error:', {
+        status: lockrResponse.status,
+        statusText: lockrResponse.statusText,
+        lockrResult
+      });
+
       return res.status(lockrResponse.status).json({
         error: lockrResult?.message || lockrResult?.error || 'Failed to create locker.'
       });
@@ -773,13 +605,18 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
       lockrResult?.data?.short_url ||
       parsedTarget.toString();
 
-    const createdAt = new Date().toISOString();
+    const items = await readJsonFile(DATA_FILES.items, []);
+    const newItem = {
+      id: nextId(items),
+      title,
+      target_url: parsedTarget.toString(),
+      lockr_url: lockrUrl,
+      image_url: finalImage,
+      created_at: new Date().toISOString()
+    };
 
-    await run(
-      `INSERT INTO items (title, target_url, lockr_url, image_url, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      [title, parsedTarget.toString(), lockrUrl, finalImage, createdAt]
-    );
+    items.push(newItem);
+    await writeJsonFile(DATA_FILES.items, items, `Add item ${title}`);
 
     res.json({ success: true });
   } catch (error) {
@@ -790,27 +627,27 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
 
 app.delete('/api/items/:id', requireAdmin, async (req, res) => {
   try {
-    const item = await get('SELECT * FROM items WHERE id = ?', [req.params.id]);
+    const items = await readJsonFile(DATA_FILES.items, []);
+    const index = items.findIndex(
+      item => Number(item.id) === Number(req.params.id)
+    );
 
-    if (!item) {
+    if (index === -1) {
       return res.status(404).json({ error: 'Item not found.' });
     }
 
-    if (item.image_url && item.image_url.startsWith('/uploads/')) {
-      const safeRelativePath = item.image_url.replace(/^\/+/, '');
-      const filePath = path.join(__dirname, safeRelativePath);
+    const [item] = items.splice(index, 1);
 
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (error) {
-          console.error('Delete image error:', error.message);
-        }
+    if (item.image_url && item.image_url.startsWith('/api/uploads/')) {
+      const filename = path.basename(item.image_url);
+      try {
+        await deleteRepoFile(`data/uploads/${filename}`, `Delete image ${filename}`);
+      } catch (error) {
+        console.error('Delete image error:', error.message);
       }
     }
 
-    await run('DELETE FROM items WHERE id = ?', [req.params.id]);
-
+    await writeJsonFile(DATA_FILES.items, items, `Delete item ${item.title}`);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete item error:', error);
@@ -820,10 +657,17 @@ app.delete('/api/items/:id', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/users', requireAdmin, async (req, res) => {
   try {
-    const users = await all(
-      'SELECT id, username, is_vip, created_at FROM users ORDER BY id DESC'
-    );
-    res.json(users);
+    const users = await readJsonFile(DATA_FILES.users, []);
+    const safeUsers = [...users]
+      .sort((a, b) => Number(b.id) - Number(a.id))
+      .map(user => ({
+        id: user.id,
+        username: user.username,
+        is_vip: user.is_vip,
+        created_at: user.created_at
+      }));
+
+    res.json(safeUsers);
   } catch (error) {
     console.error('Load users error:', error);
     res.status(500).json({ error: 'Failed to load users.' });
@@ -832,19 +676,22 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
 
 app.patch('/api/admin/users/:id/vip', requireAdmin, async (req, res) => {
   try {
-    const user = await get('SELECT * FROM users WHERE id = ?', [req.params.id]);
+    const users = await readJsonFile(DATA_FILES.users, []);
+    const user = users.find(
+      u => Number(u.id) === Number(req.params.id)
+    );
 
     if (!user) {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    const nextVip = user.is_vip ? 0 : 1;
+    user.is_vip = user.is_vip ? 0 : 1;
 
-    await run('UPDATE users SET is_vip = ? WHERE id = ?', [nextVip, req.params.id]);
+    await writeJsonFile(DATA_FILES.users, users, `Toggle VIP for ${user.username}`);
 
     res.json({
       success: true,
-      isVip: !!nextVip
+      isVip: !!user.is_vip
     });
   } catch (error) {
     console.error('Toggle VIP error:', error);
@@ -854,40 +701,31 @@ app.patch('/api/admin/users/:id/vip', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/stats', requireAdmin, async (req, res) => {
   try {
-    const totalUsers = await get('SELECT COUNT(*) as count FROM users');
-    const totalVipUsers = await get('SELECT COUNT(*) as count FROM users WHERE is_vip = 1');
-    const totalItems = await get('SELECT COUNT(*) as count FROM items');
-    const totalVisits = await get('SELECT COUNT(*) as count FROM visits');
+    const users = await readJsonFile(DATA_FILES.users, []);
+    const items = await readJsonFile(DATA_FILES.items, []);
+    const visits = await readJsonFile(DATA_FILES.visits, []);
 
-    const latestVisitsRaw = await all(`
-      SELECT ip, country_code, created_at
-      FROM visits
-      ORDER BY id DESC
-      LIMIT 20
-    `);
-
-    const latestVisits = latestVisitsRaw.map(v => ({
-      ip: v.ip,
-      country_code: v.country_code,
-      flag: countryCodeToFlagEmoji(v.country_code),
-      created_at: v.created_at
-    }));
+    const latestVisits = [...visits]
+      .sort((a, b) => Number(b.id) - Number(a.id))
+      .slice(0, 20)
+      .map(v => ({
+        ip: v.ip,
+        country_code: v.country_code,
+        flag: countryCodeToFlagEmoji(v.country_code),
+        created_at: v.created_at
+      }));
 
     res.json({
-      totalUsers: totalUsers.count,
-      totalVipUsers: totalVipUsers.count,
-      totalItems: totalItems.count,
-      totalVisits: totalVisits.count,
+      totalUsers: users.length,
+      totalVipUsers: users.filter(u => u.is_vip).length,
+      totalItems: items.length,
+      totalVisits: visits.length,
       latestVisits
     });
   } catch (error) {
     console.error('Stats error:', error);
     res.status(500).json({ error: 'Failed to load stats.' });
   }
-});
-
-app.get('/api/protected', requireUserPage, (req, res) => {
-  res.json({ success: true });
 });
 
 app.use((err, req, res, next) => {
@@ -900,10 +738,5 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`APP_BASE_URL=${APP_BASE_URL}`);
-  console.log(`PAYPAL_ENV=${PAYPAL_ENV}`);
-  console.log('PayPal debug startup:', {
-    hasClientId: !!PAYPAL_CLIENT_ID,
-    hasClientSecret: !!PAYPAL_CLIENT_SECRET
-  });
+  console.log(`GitHub storage enabled for ${GITHUB_OWNER}/${GITHUB_REPO}@${GITHUB_BRANCH}`);
 });
-
