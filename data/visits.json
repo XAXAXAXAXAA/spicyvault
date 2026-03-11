@@ -228,5 +228,15 @@
     "path": "/register",
     "referer": "",
     "created_at": "2026-03-11T21:36:50.054Z"
+  },
+  {
+    "id": 24,
+    "ip": "34.76.117.34",
+    "country_code": "BE",
+    "user_agent": "Python/3.10 aiohttp/3.13.0",
+    "browser": "Unknown",
+    "path": "/register",
+    "referer": "",
+    "created_at": "2026-03-11T21:36:54.932Z"
   }
 ]
