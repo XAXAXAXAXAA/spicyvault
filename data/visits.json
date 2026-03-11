@@ -58,5 +58,15 @@
     "path": "/register",
     "referer": "https://spicyvault.online/",
     "created_at": "2026-03-11T18:29:04.562Z"
+  },
+  {
+    "id": 7,
+    "ip": "84.32.223.114",
+    "country_code": "IE",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "browser": "Chrome",
+    "path": "/login",
+    "referer": "",
+    "created_at": "2026-03-11T20:44:16.543Z"
   }
 ]
