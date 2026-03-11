@@ -68,5 +68,15 @@
     "path": "/register",
     "referer": "",
     "created_at": "2026-03-11T20:44:16.593Z"
+  },
+  {
+    "id": 8,
+    "ip": "94.154.142.172",
+    "country_code": "NL",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "browser": "Chrome",
+    "path": "/login",
+    "referer": "",
+    "created_at": "2026-03-11T21:26:28.632Z"
   }
 ]
