@@ -18,8 +18,6 @@ app.set('trust proxy', 1);
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'lozinka123';
 const SESSION_SECRET =
   process.env.SESSION_SECRET || 'spicyvault_secret_key_demo_change_this';
-const APP_BASE_URL =
-  process.env.APP_BASE_URL || `http://127.0.0.1:${PORT}`;
 
 const LOCKR_API_URL = 'https://lockr.so/api/v1/lockers';
 const LOCKR_SECRET_API_KEY = process.env.LOCKR_SECRET_API_KEY || 'CHANGE_ME';
@@ -179,7 +177,10 @@ async function readJsonFile(filePath, fallbackValue) {
   }
 
   try {
-    return JSON.parse(result.data || 'null') ?? fallbackValue;
+    const parsed = JSON.parse(result.data || 'null');
+    return Array.isArray(fallbackValue)
+      ? (Array.isArray(parsed) ? parsed : fallbackValue)
+      : (parsed ?? fallbackValue);
   } catch {
     return fallbackValue;
   }
@@ -399,7 +400,7 @@ app.post('/api/register', async (req, res) => {
 
     const users = await readJsonFile(DATA_FILES.users, []);
     const existing = users.find(
-      user => user.username.toLowerCase() === username.toLowerCase()
+      user => String(user.username || '').toLowerCase() === username.toLowerCase()
     );
 
     if (existing) {
@@ -437,7 +438,7 @@ app.post('/api/login', async (req, res) => {
 
     const users = await readJsonFile(DATA_FILES.users, []);
     const user = users.find(
-      u => u.username.toLowerCase() === username.toLowerCase()
+      u => String(u.username || '').toLowerCase() === username.toLowerCase()
     );
 
     if (!user) {
@@ -663,7 +664,7 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
       .map(user => ({
         id: user.id,
         username: user.username,
-        is_vip: user.is_vip,
+        is_vip: !!user.is_vip,
         created_at: user.created_at
       }));
 
@@ -709,22 +710,28 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
       .sort((a, b) => Number(b.id) - Number(a.id))
       .slice(0, 20)
       .map(v => ({
-        ip: v.ip,
-        country_code: v.country_code,
+        ip: v.ip || '',
+        country_code: v.country_code || '',
         flag: countryCodeToFlagEmoji(v.country_code),
-        created_at: v.created_at
+        created_at: v.created_at || ''
       }));
 
     res.json({
-      totalUsers: users.length,
-      totalVipUsers: users.filter(u => u.is_vip).length,
-      totalItems: items.length,
-      totalVisits: visits.length,
+      totalUsers: users.length || 0,
+      totalVipUsers: users.filter(u => !!u.is_vip).length || 0,
+      totalItems: items.length || 0,
+      totalVisits: visits.length || 0,
       latestVisits
     });
   } catch (error) {
     console.error('Stats error:', error);
-    res.status(500).json({ error: 'Failed to load stats.' });
+    res.json({
+      totalUsers: 0,
+      totalVipUsers: 0,
+      totalItems: 0,
+      totalVisits: 0,
+      latestVisits: []
+    });
   }
 });
 
@@ -737,6 +744,5 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`APP_BASE_URL=${APP_BASE_URL}`);
   console.log(`GitHub storage enabled for ${GITHUB_OWNER}/${GITHUB_REPO}@${GITHUB_BRANCH}`);
 });
