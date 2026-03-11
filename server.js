@@ -95,6 +95,12 @@ async function readRepoFile(filePath, fallbackValue) {
   const payload = await parseJsonSafe(response);
 
   if (!response.ok) {
+    console.error('GitHub read error:', {
+      filePath,
+      status: response.status,
+      statusText: response.statusText,
+      payload
+    });
     throw new Error(payload.message || `Failed to read ${filePath} from GitHub.`);
   }
 
@@ -132,6 +138,12 @@ async function writeRepoFile(filePath, rawContent, message) {
     const payload = await parseJsonSafe(response);
 
     if (!response.ok) {
+      console.error('GitHub write error:', {
+        filePath,
+        status: response.status,
+        statusText: response.statusText,
+        payload
+      });
       throw new Error(payload.message || `Failed to write ${filePath} to GitHub.`);
     }
 
@@ -159,6 +171,12 @@ async function deleteRepoFile(filePath, message) {
     const payload = await parseJsonSafe(response);
 
     if (!response.ok) {
+      console.error('GitHub delete error:', {
+        filePath,
+        status: response.status,
+        statusText: response.statusText,
+        payload
+      });
       throw new Error(payload.message || `Failed to delete ${filePath} from GitHub.`);
     }
   });
@@ -585,14 +603,18 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
         }
       }
 
-      console.error('Lockr create error:', {
+      console.error('Lockr create error:', JSON.stringify({
         status: lockrResponse.status,
         statusText: lockrResponse.statusText,
         lockrResult
-      });
+      }, null, 2));
 
       return res.status(lockrResponse.status).json({
-        error: lockrResult?.message || lockrResult?.error || 'Failed to create locker.'
+        error:
+          lockrResult?.errors?.[0]?.message ||
+          lockrResult?.message ||
+          lockrResult?.error ||
+          'Failed to create locker.'
       });
     }
 
