@@ -55,16 +55,8 @@
           <p>Free users must complete the ad before accessing the content.</p>
           <p>Premium is available on Discord, and premium users do not need to watch any ads.</p>
 
-          <div id="paypalMessage" class="status" style="margin-top:12px;"></div>
-
-          <div id="vipPlansLoggedOut" class="actions" style="display:none;">
-            <a class="solid-link" href="/login">Login to buy VIP</a>
-          </div>
-
-          <div id="vipPlansLoggedIn" class="actions" style="display:none;">
-            <button class="solid-link" type="button" data-plan="week" style="border:none; cursor:pointer;">Buy VIP 1 Week (€5)</button>
-            <button class="solid-link" type="button" data-plan="month" style="border:none; cursor:pointer;">Buy VIP 1 Month (€15)</button>
-            <button class="solid-link" type="button" data-plan="lifetime" style="border:none; cursor:pointer;">Buy VIP Lifetime (€25)</button>
+          <div id="vipInfo" class="status success" style="margin-top:12px;">
+            VIP purchase on site is currently disabled.
           </div>
         </div>
 
@@ -86,69 +78,6 @@
     </div>
   </main>
 
-  <div
-    id="paypalModal"
-    style="
-      display:none;
-      position:fixed;
-      inset:0;
-      background:rgba(0,0,0,0.72);
-      z-index:9999;
-      align-items:center;
-      justify-content:center;
-      padding:20px;
-    "
-  >
-    <div
-      style="
-        width:100%;
-        max-width:460px;
-        background:#12071f;
-        border:1px solid rgba(255,255,255,0.08);
-        border-radius:20px;
-        box-shadow:0 20px 60px rgba(0,0,0,0.45);
-        padding:22px;
-        color:#fff;
-      "
-    >
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px;">
-        <div>
-          <div style="font-size:12px; opacity:0.7; letter-spacing:0.08em;">PAYPAL CHECKOUT</div>
-          <div id="paypalModalTitle" style="font-size:22px; font-weight:800; margin-top:4px;">VIP</div>
-        </div>
-        <button
-          id="closePaypalModal"
-          type="button"
-          style="
-            border:none;
-            background:transparent;
-            color:#fff;
-            font-size:28px;
-            cursor:pointer;
-            line-height:1;
-          "
-        >&times;</button>
-      </div>
-
-      <div id="paypalModalText" style="opacity:0.82; margin-bottom:14px;">
-        Complete your payment securely with PayPal.
-      </div>
-
-      <div id="paypalCheckoutError" class="status error" style="display:none; margin-bottom:12px;"></div>
-
-      <div
-        id="paypalButtonsWrap"
-        style="
-          background:#fff;
-          border-radius:14px;
-          padding:14px;
-        "
-      >
-        <div id="paypalButtonsContainer"></div>
-      </div>
-    </div>
-  </div>
-
   <script>
     const cards = document.getElementById('cards');
     const searchInput = document.getElementById('searchInput');
@@ -159,37 +88,9 @@
     const topUsername = document.getElementById('topUsername');
     const topVipBadge = document.getElementById('topVipBadge');
     const logoutBtn = document.getElementById('logoutBtn');
-    const vipPlansLoggedOut = document.getElementById('vipPlansLoggedOut');
-    const vipPlansLoggedIn = document.getElementById('vipPlansLoggedIn');
-    const paypalMessage = document.getElementById('paypalMessage');
-
-    const paypalModal = document.getElementById('paypalModal');
-    const closePaypalModal = document.getElementById('closePaypalModal');
-    const paypalModalTitle = document.getElementById('paypalModalTitle');
-    const paypalModalText = document.getElementById('paypalModalText');
-    const paypalCheckoutError = document.getElementById('paypalCheckoutError');
-    const paypalButtonsContainer = document.getElementById('paypalButtonsContainer');
 
     let items = [];
     let me = { loggedIn: false, isVip: false, username: null };
-    let paypalConfig = null;
-    let paypalSdkLoaded = false;
-    let currentPlan = null;
-
-    const PLAN_INFO = {
-      week: {
-        title: 'VIP 1 Week',
-        amount: '€5'
-      },
-      month: {
-        title: 'VIP 1 Month',
-        amount: '€15'
-      },
-      lifetime: {
-        title: 'VIP Lifetime',
-        amount: '€25'
-      }
-    };
 
     function escapeHtml(value) {
       return String(value || '')
@@ -222,28 +123,6 @@
       return item.lockr_url || item.target_url;
     }
 
-    function setPaypalMessage(type, text) {
-      paypalMessage.textContent = text || '';
-      paypalMessage.className = type ? `status ${type}` : 'status';
-    }
-
-    function updatePayPalMessage() {
-      const params = new URLSearchParams(window.location.search);
-      const paypal = params.get('paypal');
-
-      if (paypal === 'success') {
-        setPaypalMessage('success', 'VIP activated successfully.');
-      } else if (paypal === 'cancel') {
-        setPaypalMessage('error', 'Payment was canceled.');
-      } else if (paypal === 'error') {
-        setPaypalMessage('error', 'Payment error. Please try again.');
-      } else if (paypal === 'notfound' || paypal === 'missing') {
-        setPaypalMessage('error', 'Payment could not be verified.');
-      } else {
-        setPaypalMessage('', '');
-      }
-    }
-
     function updateTopbar() {
       accessType.textContent = me.loggedIn ? (me.isVip ? 'VIP' : 'User') : 'Guest';
 
@@ -252,13 +131,9 @@
         userBox.style.display = 'flex';
         topUsername.textContent = me.username || 'User';
         topVipBadge.style.display = me.isVip ? 'inline-flex' : 'none';
-        vipPlansLoggedOut.style.display = 'none';
-        vipPlansLoggedIn.style.display = me.isVip ? 'none' : 'flex';
       } else {
         guestLinks.style.display = 'flex';
         userBox.style.display = 'none';
-        vipPlansLoggedOut.style.display = 'flex';
-        vipPlansLoggedIn.style.display = 'none';
       }
     }
 
@@ -317,158 +192,6 @@
       render(items);
     }
 
-    async function loadPayPalConfig() {
-      const res = await fetch('/api/paypal/config');
-      paypalConfig = await res.json();
-    }
-
-    function showCheckoutError(message) {
-      paypalCheckoutError.textContent = message;
-      paypalCheckoutError.style.display = 'block';
-    }
-
-    function hideCheckoutError() {
-      paypalCheckoutError.textContent = '';
-      paypalCheckoutError.style.display = 'none';
-    }
-
-    function openPaypalModal(plan) {
-      currentPlan = plan;
-      const info = PLAN_INFO[plan];
-
-      paypalModalTitle.textContent = `${info.title} (${info.amount})`;
-      paypalModalText.textContent = 'Complete your payment securely with PayPal.';
-      hideCheckoutError();
-      paypalButtonsContainer.innerHTML = '';
-      paypalModal.style.display = 'flex';
-
-      renderPayPalButtons(plan).catch(err => {
-        console.error(err);
-        showCheckoutError('Failed to load PayPal checkout.');
-      });
-    }
-
-    function closePaypalModalFn() {
-      paypalModal.style.display = 'none';
-      currentPlan = null;
-      paypalButtonsContainer.innerHTML = '';
-      hideCheckoutError();
-    }
-
-    async function ensurePayPalSdkLoaded() {
-      if (paypalSdkLoaded && window.paypal) {
-        return;
-      }
-
-      if (!paypalConfig || !paypalConfig.clientId) {
-        throw new Error('PayPal client ID is missing.');
-      }
-
-      await new Promise((resolve, reject) => {
-        const existing = document.querySelector('script[data-paypal-sdk="true"]');
-        if (existing) {
-          existing.addEventListener('load', resolve, { once: true });
-          existing.addEventListener('error', reject, { once: true });
-          if (window.paypal) resolve();
-          return;
-        }
-
-        const script = document.createElement('script');
-        script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(paypalConfig.clientId)}&currency=${encodeURIComponent(paypalConfig.currency || 'EUR')}&intent=capture`;
-        script.async = true;
-        script.dataset.paypalSdk = 'true';
-        script.onload = () => {
-          paypalSdkLoaded = true;
-          resolve();
-        };
-        script.onerror = () => reject(new Error('Failed to load PayPal SDK.'));
-        document.head.appendChild(script);
-      });
-
-      paypalSdkLoaded = true;
-    }
-
-    async function renderPayPalButtons(plan) {
-      await ensurePayPalSdkLoaded();
-
-      if (!window.paypal) {
-        throw new Error('PayPal SDK unavailable.');
-      }
-
-      paypalButtonsContainer.innerHTML = '';
-
-      window.paypal.Buttons({
-        style: {
-          layout: 'vertical',
-          color: 'gold',
-          shape: 'rect',
-          label: 'paypal',
-          height: 48
-        },
-
-        createOrder: async () => {
-          hideCheckoutError();
-
-          const res = await fetch('/api/paypal/create-order', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ plan })
-          });
-
-          const data = await res.json().catch(() => ({}));
-
-          if (!res.ok || !data.orderID) {
-            throw new Error(data.error || 'Failed to create PayPal order.');
-          }
-
-          return data.orderID;
-        },
-
-        onApprove: async (data) => {
-          hideCheckoutError();
-
-          const res = await fetch('/api/paypal/capture-order', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ orderID: data.orderID })
-          });
-
-          const result = await res.json().catch(() => ({}));
-
-          if (!res.ok) {
-            throw new Error(result.error || 'Failed to capture payment.');
-          }
-
-          closePaypalModalFn();
-          setPaypalMessage('success', 'VIP activated successfully.');
-          await loadMe();
-          await loadItems();
-
-          const url = new URL(window.location.href);
-          url.searchParams.set('paypal', 'success');
-          window.history.replaceState({}, '', url.toString());
-        },
-
-        onCancel: () => {
-          closePaypalModalFn();
-          setPaypalMessage('error', 'Payment was canceled.');
-
-          const url = new URL(window.location.href);
-          url.searchParams.set('paypal', 'cancel');
-          window.history.replaceState({}, '', url.toString());
-        },
-
-        onError: (err) => {
-          console.error('PayPal Buttons error:', err);
-          showCheckoutError(err?.message || 'Payment error. Please try again.');
-        }
-      }).render('#paypalButtonsContainer');
-    }
-
     logoutBtn.addEventListener('click', async () => {
       await fetch('/api/logout', { method: 'POST' });
       window.location.reload();
@@ -476,37 +199,9 @@
 
     searchInput.addEventListener('input', applySearch);
 
-    closePaypalModal.addEventListener('click', closePaypalModalFn);
-
-    paypalModal.addEventListener('click', (e) => {
-      if (e.target === paypalModal) {
-        closePaypalModalFn();
-      }
-    });
-
-    vipPlansLoggedIn.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-plan]');
-      if (!btn) return;
-
-      if (!me.loggedIn) {
-        window.location.href = '/login';
-        return;
-      }
-
-      if (me.isVip) {
-        setPaypalMessage('success', 'Your account is already VIP.');
-        return;
-      }
-
-      const plan = btn.getAttribute('data-plan');
-      openPaypalModal(plan);
-    });
-
     (async () => {
-      updatePayPalMessage();
       await loadMe();
       await loadItems();
-      await loadPayPalConfig();
     })();
   </script>
 </body>
