@@ -307,85 +307,50 @@ async function createLockrLocker({ title, targetUrl }) {
     throw new Error('Missing LOCKR_SECRET_API_KEY.');
   }
 
-  const payloadCandidates = [
-    { title, url: targetUrl },
-    { name: title, url: targetUrl },
-    { title, link: targetUrl },
-    { name: title, link: targetUrl },
-    { title, target_url: targetUrl },
-    { name: title, target_url: targetUrl },
-    { title, destination_url: targetUrl },
-    { name: title, destination_url: targetUrl },
-    { title, redirect_url: targetUrl },
-    { name: title, redirect_url: targetUrl }
-  ];
+  const payload = {
+    title,
+    target: targetUrl
+  };
 
-  const attempts = [];
+  const response = await fetchFn(LOCKR_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${LOCKR_SECRET_API_KEY}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
 
-  for (const payload of payloadCandidates) {
-    try {
-      const response = await fetchFn(LOCKR_API_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${LOCKR_SECRET_API_KEY}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'User-Agent': 'SpicyVault/1.0'
-        },
-        body: JSON.stringify(payload)
-      });
+  const result = await parseJsonSafe(response);
+  const lockrUrl = extractLockrUrl(result);
 
-      const result = await parseJsonSafe(response);
-      const lockrUrl = extractLockrUrl(result);
+  if (!response.ok) {
+    console.error('Lockr create error:', JSON.stringify({
+      status: response.status,
+      statusText: response.statusText,
+      payload,
+      result
+    }, null, 2));
 
-      attempts.push({
-        status: response.status,
-        statusText: response.statusText,
-        payload,
-        result
-      });
-
-      if (response.ok && lockrUrl) {
-        console.log('Lockr create success:', JSON.stringify({
-          payload,
-          result
-        }, null, 2));
-
-        return {
-          ok: true,
-          lockrUrl,
-          payloadUsed: payload,
-          result
-        };
-      }
-
-      if (response.ok && !lockrUrl) {
-        console.error('Lockr success without URL:', JSON.stringify({
-          payload,
-          result
-        }, null, 2));
-      }
-    } catch (error) {
-      attempts.push({
-        status: 500,
-        statusText: 'Request Error',
-        payload,
-        result: {
-          message: error.message || 'Lockr request failed.'
-        }
-      });
-    }
+    const error = new Error(getLockrErrorMessage(result));
+    error.status = response.status;
+    throw error;
   }
 
-  console.error('Lockr create failed. All attempts:', JSON.stringify(attempts, null, 2));
+  if (!lockrUrl) {
+    console.error('Lockr success without URL:', JSON.stringify({
+      payload,
+      result
+    }, null, 2));
 
-  const lastAttempt = attempts[attempts.length - 1] || null;
-  const errorMessage = getLockrErrorMessage(lastAttempt?.result);
+    throw new Error('Lockr created response but lockr URL missing.');
+  }
 
-  const error = new Error(errorMessage);
-  error.status = lastAttempt?.status || 500;
-  error.lockrAttempts = attempts;
-  throw error;
+  return {
+    lockrUrl,
+    result
+  };
 }
 
 const upload = multer({
@@ -715,12 +680,6 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
           console.error('Upload rollback error:', rollbackError.message);
         }
       }
-
-      console.error('Lockr create error:', JSON.stringify({
-        status: lockrError.status || 500,
-        message: lockrError.message,
-        attempts: lockrError.lockrAttempts || []
-      }, null, 2));
 
       return res.status(lockrError.status || 500).json({
         error: lockrError.message || 'Failed to create locker.'
