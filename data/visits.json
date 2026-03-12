@@ -268,5 +268,15 @@
     "path": "/",
     "referer": "",
     "created_at": "2026-03-11T23:50:45.282Z"
+  },
+  {
+    "id": 28,
+    "ip": "127.0.0.1",
+    "country_code": "LOCAL",
+    "user_agent": "curl/8.7.1",
+    "browser": "Unknown",
+    "path": "/login",
+    "referer": "",
+    "created_at": "2026-03-12T00:16:43.501Z"
   }
 ]
