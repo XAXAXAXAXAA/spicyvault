@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "id": 1,
+    "username": "premium",
+    "password_hash": "$2a$10$TUp9nuJX2TuLsD8a2j2ofebVU.f1QgMI6O02fLTmwxFBzXcK4v4gK",
+    "is_vip": 0,
+    "created_at": "2026-03-12T14:32:56.233Z"
+  }
+]
