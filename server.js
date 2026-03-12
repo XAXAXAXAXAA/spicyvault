@@ -264,6 +264,130 @@ function nextId(list) {
   return list.length ? Math.max(...list.map(item => Number(item.id) || 0)) + 1 : 1;
 }
 
+function getLockrErrorMessage(payload) {
+  if (!payload) return 'Failed to create locker.';
+  if (typeof payload === 'string') return payload;
+
+  return (
+    payload?.errors?.[0]?.message ||
+    payload?.errors?.[0]?.detail ||
+    payload?.error?.message ||
+    payload?.error ||
+    payload?.message ||
+    payload?.detail ||
+    payload?.raw ||
+    'Failed to create locker.'
+  );
+}
+
+function extractLockrUrl(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+
+  return (
+    payload?.url ||
+    payload?.link ||
+    payload?.short_url ||
+    payload?.locker_url ||
+    payload?.redirect_url ||
+    payload?.data?.url ||
+    payload?.data?.link ||
+    payload?.data?.short_url ||
+    payload?.data?.locker_url ||
+    payload?.data?.redirect_url ||
+    payload?.result?.url ||
+    payload?.result?.link ||
+    payload?.result?.short_url ||
+    payload?.result?.locker_url ||
+    ''
+  );
+}
+
+async function createLockrLocker({ title, targetUrl }) {
+  if (!LOCKR_SECRET_API_KEY || LOCKR_SECRET_API_KEY === 'CHANGE_ME') {
+    throw new Error('Missing LOCKR_SECRET_API_KEY.');
+  }
+
+  const payloadCandidates = [
+    { title, url: targetUrl },
+    { name: title, url: targetUrl },
+    { title, link: targetUrl },
+    { name: title, link: targetUrl },
+    { title, target_url: targetUrl },
+    { name: title, target_url: targetUrl },
+    { title, destination_url: targetUrl },
+    { name: title, destination_url: targetUrl },
+    { title, redirect_url: targetUrl },
+    { name: title, redirect_url: targetUrl }
+  ];
+
+  const attempts = [];
+
+  for (const payload of payloadCandidates) {
+    try {
+      const response = await fetchFn(LOCKR_API_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${LOCKR_SECRET_API_KEY}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': 'SpicyVault/1.0'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await parseJsonSafe(response);
+      const lockrUrl = extractLockrUrl(result);
+
+      attempts.push({
+        status: response.status,
+        statusText: response.statusText,
+        payload,
+        result
+      });
+
+      if (response.ok && lockrUrl) {
+        console.log('Lockr create success:', JSON.stringify({
+          payload,
+          result
+        }, null, 2));
+
+        return {
+          ok: true,
+          lockrUrl,
+          payloadUsed: payload,
+          result
+        };
+      }
+
+      if (response.ok && !lockrUrl) {
+        console.error('Lockr success without URL:', JSON.stringify({
+          payload,
+          result
+        }, null, 2));
+      }
+    } catch (error) {
+      attempts.push({
+        status: 500,
+        statusText: 'Request Error',
+        payload,
+        result: {
+          message: error.message || 'Lockr request failed.'
+        }
+      });
+    }
+  }
+
+  console.error('Lockr create failed. All attempts:', JSON.stringify(attempts, null, 2));
+
+  const lastAttempt = attempts[attempts.length - 1] || null;
+  const errorMessage = getLockrErrorMessage(lastAttempt?.result);
+
+  const error = new Error(errorMessage);
+  error.status = lastAttempt?.status || 500;
+  error.lockrAttempts = attempts;
+  throw error;
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -571,27 +695,16 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
       }
     }
 
-    if (!LOCKR_SECRET_API_KEY || LOCKR_SECRET_API_KEY === 'CHANGE_ME') {
-      return res.status(500).json({ error: 'Missing LOCKR_SECRET_API_KEY.' });
-    }
+    let lockrUrl = '';
 
-    const payload = {
-      title,
-      url: parsedTarget.toString()
-    };
+    try {
+      const lockrCreate = await createLockrLocker({
+        title,
+        targetUrl: parsedTarget.toString()
+      });
 
-    const lockrResponse = await fetchFn(LOCKR_API_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${LOCKR_SECRET_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const lockrResult = await parseJsonSafe(lockrResponse);
-
-    if (!lockrResponse.ok) {
+      lockrUrl = lockrCreate.lockrUrl;
+    } catch (lockrError) {
       if (uploadedFilename) {
         try {
           await deleteRepoFile(
@@ -604,29 +717,15 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
       }
 
       console.error('Lockr create error:', JSON.stringify({
-        status: lockrResponse.status,
-        statusText: lockrResponse.statusText,
-        lockrResult
+        status: lockrError.status || 500,
+        message: lockrError.message,
+        attempts: lockrError.lockrAttempts || []
       }, null, 2));
 
-      return res.status(lockrResponse.status).json({
-        error:
-          lockrResult?.errors?.[0]?.message ||
-          lockrResult?.message ||
-          lockrResult?.error ||
-          'Failed to create locker.'
+      return res.status(lockrError.status || 500).json({
+        error: lockrError.message || 'Failed to create locker.'
       });
     }
-
-    const lockrUrl =
-      lockrResult?.url ||
-      lockrResult?.link ||
-      lockrResult?.short_url ||
-      lockrResult?.locker_url ||
-      lockrResult?.data?.url ||
-      lockrResult?.data?.link ||
-      lockrResult?.data?.short_url ||
-      parsedTarget.toString();
 
     const items = await readJsonFile(DATA_FILES.items, []);
     const newItem = {
@@ -641,7 +740,10 @@ app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res
     items.push(newItem);
     await writeJsonFile(DATA_FILES.items, items, `Add item ${title}`);
 
-    res.json({ success: true });
+    res.json({
+      success: true,
+      item: newItem
+    });
   } catch (error) {
     console.error('Create item error:', error);
     res.status(500).json({ error: error.message || 'Internal server error.' });
