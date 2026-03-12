@@ -298,6 +298,8 @@ function extractLockrUrl(payload) {
     payload?.result?.link ||
     payload?.result?.short_url ||
     payload?.result?.locker_url ||
+    payload?.data?.locker?.url ||
+    payload?.data?.locker?.link ||
     ''
   );
 }
@@ -323,7 +325,6 @@ async function createLockrLocker({ title, targetUrl }) {
   });
 
   const result = await parseJsonSafe(response);
-  const lockrUrl = extractLockrUrl(result);
 
   if (!response.ok) {
     console.error('Lockr create error:', JSON.stringify({
@@ -338,13 +339,15 @@ async function createLockrLocker({ title, targetUrl }) {
     throw error;
   }
 
+  const lockrUrl = extractLockrUrl(result);
+
   if (!lockrUrl) {
     console.error('Lockr success without URL:', JSON.stringify({
       payload,
       result
     }, null, 2));
 
-    throw new Error('Lockr created response but lockr URL missing.');
+    throw new Error('Lockr created but lockr URL missing in response.');
   }
 
   return {
@@ -623,12 +626,16 @@ app.get('/api/items', async (req, res) => {
 
 app.post('/api/items', requireAdmin, upload.single('imageFile'), async (req, res) => {
   try {
-    const title = (req.body.title || '').trim();
-    const target = (req.body.target || '').trim();
-    const imageUrl = (req.body.imageUrl || '').trim();
+    const title = String(req.body.title || '').trim();
+    const target = String(req.body.target || '').trim();
+    const imageUrl = String(req.body.imageUrl || '').trim();
 
-    if (!title || !target) {
-      return res.status(400).json({ error: 'Title and target URL are required.' });
+    if (!title) {
+      return res.status(400).json({ error: 'Title is required.' });
+    }
+
+    if (!target) {
+      return res.status(400).json({ error: 'Target URL is required.' });
     }
 
     let parsedTarget;
