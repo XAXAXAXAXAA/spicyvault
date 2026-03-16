@@ -768,5 +768,15 @@
     "path": "/admin",
     "referer": "",
     "created_at": "2026-03-16T01:02:44.834Z"
+  },
+  {
+    "id": 78,
+    "ip": "135.181.213.219",
+    "country_code": "FI",
+    "user_agent": "Mozilla/5.0 (compatible; MJ12bot/v1.4.8; http://mj12bot.com/)",
+    "browser": "Unknown",
+    "path": "/login",
+    "referer": "",
+    "created_at": "2026-03-16T01:24:10.074Z"
   }
 ]
