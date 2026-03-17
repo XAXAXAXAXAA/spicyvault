@@ -391,7 +391,7 @@ app.use(express.static(PUBLIC_DIR));
 
 app.use(async (req, res, next) => {
   try {
-    const shouldLogVisit = ['/', '/login', '/register', '/admin', '/admin-login'].includes(req.path);
+    const shouldLogVisit = ['/', '/login', '/register', '/admin', '/admin-login', '/keygenerator'].includes(req.path);
 
     if (shouldLogVisit) {
       const visits = await readJsonFile(DATA_FILES.visits, []);
@@ -452,6 +452,11 @@ app.get('/admin', (req, res) => {
   }
 
   res.sendFile(path.join(PUBLIC_DIR, 'admin.html'));
+});
+
+/* NOVO: keygenerator route */
+app.get('/keygenerator', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'keygenerator.html'));
 });
 
 app.get('/api/uploads/:filename', async (req, res) => {
