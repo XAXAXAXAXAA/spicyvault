@@ -205,7 +205,8 @@
   <script>
     const API_BASE = "https://api.spicyvault.online";
     const params = new URLSearchParams(window.location.search);
-    const ticket = params.get("ticket");
+    const userId = params.get("user_id");
+    const guildId = params.get("guild_id");
 
     const generateBtn = document.getElementById("generateBtn");
     const copyBtn = document.getElementById("copyBtn");
