@@ -248,7 +248,9 @@
           headers: {
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ ticket })
+          body: JSON.stringify({
+          user_id: Number(userId),
+          guild_id: Number(guildId)
         });
 
         const data = await res.json();
