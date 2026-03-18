@@ -1168,5 +1168,15 @@
     "path": "/register",
     "referer": "https://spicyvault.online/",
     "created_at": "2026-03-18T04:05:36.640Z"
+  },
+  {
+    "id": 118,
+    "ip": "17.22.245.166",
+    "country_code": "US",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15 (Applebot/0.1; +http://www.apple.com/go/applebot)",
+    "browser": "Safari",
+    "path": "/login",
+    "referer": "",
+    "created_at": "2026-03-18T05:35:54.608Z"
   }
 ]
