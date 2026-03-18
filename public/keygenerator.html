@@ -10,7 +10,6 @@
       --bg: #09070f;
       --bg2: #120d1e;
       --card: rgba(17, 14, 29, 0.9);
-      --line: rgba(167, 139, 250, 0.18);
       --text: #f5f3ff;
       --muted: #b7abc9;
       --accent: #8b5cf6;
@@ -19,14 +18,8 @@
       --danger: #fca5a5;
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
-    html, body {
-      margin: 0;
-      min-height: 100%;
-    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
 
     body {
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -130,15 +123,8 @@
       color: white;
     }
 
-    .btn:hover {
-      transform: translateY(-1px);
-    }
-
-    .btn:disabled {
-      opacity: .65;
-      cursor: not-allowed;
-      transform: none;
-    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:disabled { opacity: .65; cursor: not-allowed; transform: none; }
 
     .ghost-link {
       display: inline-flex;
@@ -156,12 +142,9 @@
     .kg-key-wrap {
       margin-top: 22px;
       display: none;
-      animation: fadeUp .35s ease;
     }
 
-    .kg-key-wrap.show {
-      display: block;
-    }
+    .kg-key-wrap.show { display: block; }
 
     .kg-key-label {
       font-size: 12px;
@@ -196,12 +179,9 @@
       color: #fff;
       background: linear-gradient(180deg, rgba(139,92,246,.18), rgba(139,92,246,.08));
       border: 1px solid rgba(196,181,253,.28);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
     }
 
-    .kg-copy {
-      min-width: 160px;
-    }
+    .kg-copy { min-width: 160px; }
 
     .kg-meta {
       margin-top: 14px;
@@ -215,34 +195,8 @@
       font-size: 14px;
     }
 
-    .kg-status.ok {
-      color: var(--success);
-    }
-
-    .kg-status.err {
-      color: var(--danger);
-    }
-
-    .spinner {
-      width: 18px;
-      height: 18px;
-      border-radius: 999px;
-      border: 2px solid rgba(255,255,255,0.2);
-      border-top-color: #fff;
-      animation: spin .8s linear infinite;
-      display: inline-block;
-      vertical-align: middle;
-      margin-right: 8px;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+    .kg-status.ok { color: var(--success); }
+    .kg-status.err { color: var(--danger); }
   </style>
 </head>
 <body>
@@ -294,7 +248,7 @@
 
     function setStatus(message, type = "") {
       statusEl.className = "kg-status" + (type ? ` ${type}` : "");
-      statusEl.innerHTML = message;
+      statusEl.textContent = message;
     }
 
     function renderKey(code) {
@@ -315,7 +269,7 @@
       }
 
       generateBtn.disabled = true;
-      setStatus('<span class="spinner"></span>Generating your key...');
+      setStatus("Generating your key...");
 
       try {
         const res = await fetch(`${API_BASE}/api/key/generate`, {
@@ -324,7 +278,8 @@
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            user_id: Number(userId)
+            user_id: Number(userId),
+            guild_id: Number(guildId)
           })
         });
 
@@ -339,7 +294,7 @@
         metaEl.textContent = `Expires at ${data.expires} UTC • One-time use • Bound to your Discord account`;
         setStatus("Key generated successfully.", "ok");
       } catch (err) {
-        setStatus(err.message || "Something went wrong.", "err");
+        setStatus(err.message || "Failed to fetch", "err");
       } finally {
         generateBtn.disabled = false;
       }
