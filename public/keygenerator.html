@@ -17,10 +17,8 @@
       --success: #86efac;
       --danger: #fca5a5;
     }
-
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; }
-
     body {
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       color: var(--text);
@@ -29,14 +27,7 @@
         radial-gradient(circle at 80% 10%, rgba(192,132,252,.12), transparent 20%),
         linear-gradient(180deg, var(--bg), var(--bg2));
     }
-
-    .kg-page {
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 32px 16px;
-    }
-
+    .kg-page { min-height: 100vh; display: grid; place-items: center; padding: 32px 16px; }
     .kg-card {
       width: min(720px, 100%);
       background: linear-gradient(180deg, rgba(18,14,30,0.96), rgba(24,18,38,0.98));
@@ -46,24 +37,7 @@
       overflow: hidden;
       position: relative;
     }
-
-    .kg-card::before {
-      content: "";
-      position: absolute;
-      inset: -20%;
-      background:
-        radial-gradient(circle at 20% 20%, rgba(139,92,246,.22), transparent 26%),
-        radial-gradient(circle at 80% 10%, rgba(192,132,252,.16), transparent 24%),
-        radial-gradient(circle at 50% 100%, rgba(168,85,247,.15), transparent 28%);
-      pointer-events: none;
-    }
-
-    .kg-inner {
-      position: relative;
-      z-index: 1;
-      padding: 32px;
-    }
-
+    .kg-inner { position: relative; z-index: 1; padding: 32px; }
     .kg-badge {
       display: inline-flex;
       align-items: center;
@@ -78,21 +52,13 @@
       letter-spacing: .14em;
       text-transform: uppercase;
     }
-
     .kg-title {
       margin: 18px 0 10px;
       font-size: clamp(32px, 5vw, 54px);
       line-height: 1.02;
       color: #fff;
     }
-
-    .kg-sub {
-      margin: 0;
-      color: var(--muted);
-      line-height: 1.65;
-      max-width: 620px;
-    }
-
+    .kg-sub { margin: 0; color: var(--muted); line-height: 1.65; max-width: 620px; }
     .kg-panel {
       margin-top: 24px;
       border-radius: 24px;
@@ -100,14 +66,7 @@
       background: rgba(255,255,255,0.03);
       padding: 20px;
     }
-
-    .kg-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 18px;
-    }
-
+    .kg-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
     .btn {
       appearance: none;
       border: none;
@@ -118,14 +77,9 @@
       font-weight: 700;
       font-size: 15px;
       cursor: pointer;
-      transition: transform .15s ease, opacity .15s ease;
       background: linear-gradient(135deg, var(--accent), var(--accent2));
       color: white;
     }
-
-    .btn:hover { transform: translateY(-1px); }
-    .btn:disabled { opacity: .65; cursor: not-allowed; transform: none; }
-
     .ghost-link {
       display: inline-flex;
       align-items: center;
@@ -138,14 +92,8 @@
       border: 1px solid rgba(255,255,255,0.08);
       background: rgba(255,255,255,0.03);
     }
-
-    .kg-key-wrap {
-      margin-top: 22px;
-      display: none;
-    }
-
+    .kg-key-wrap { margin-top: 22px; display: none; }
     .kg-key-wrap.show { display: block; }
-
     .kg-key-label {
       font-size: 12px;
       letter-spacing: .16em;
@@ -153,21 +101,8 @@
       color: #d9c8ff;
       margin-bottom: 12px;
     }
-
-    .kg-key-row {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    .kg-key {
-      flex: 1 1 320px;
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
+    .kg-key-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .kg-key { flex: 1 1 320px; display: flex; gap: 10px; flex-wrap: wrap; }
     .kg-cell {
       width: 72px;
       height: 82px;
@@ -180,21 +115,9 @@
       background: linear-gradient(180deg, rgba(139,92,246,.18), rgba(139,92,246,.08));
       border: 1px solid rgba(196,181,253,.28);
     }
-
     .kg-copy { min-width: 160px; }
-
-    .kg-meta {
-      margin-top: 14px;
-      color: var(--muted);
-      font-size: 14px;
-    }
-
-    .kg-status {
-      margin-top: 14px;
-      min-height: 22px;
-      font-size: 14px;
-    }
-
+    .kg-meta { margin-top: 14px; color: var(--muted); font-size: 14px; }
+    .kg-status { margin-top: 14px; min-height: 22px; font-size: 14px; }
     .kg-status.ok { color: var(--success); }
     .kg-status.err { color: var(--danger); }
   </style>
@@ -232,7 +155,6 @@
 
   <script>
     const API_BASE = "https://spicyvault-api.onrender.com";
-
     const params = new URLSearchParams(window.location.search);
     const userId = params.get("user_id");
     const guildId = params.get("guild_id");
@@ -274,9 +196,7 @@
       try {
         const res = await fetch(`${API_BASE}/api/key/generate`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             user_id: Number(userId),
             guild_id: Number(guildId)
