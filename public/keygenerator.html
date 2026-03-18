@@ -1,87 +1,366 @@
-<script>
-const API_BASE = "https://spicyvault-api.onrender.com";
-
-const params = new URLSearchParams(window.location.search);
-const userId = params.get("user_id");
-const guildId = params.get("guild_id");
-
-const generateBtn = document.getElementById("generateBtn");
-const copyBtn = document.getElementById("copyBtn");
-const keyWrap = document.getElementById("keyWrap");
-const keyDisplay = document.getElementById("keyDisplay");
-const statusEl = document.getElementById("status");
-const metaEl = document.getElementById("meta");
-
-let currentKey = "";
-
-function setStatus(message, type = "") {
-  statusEl.className = "kg-status" + (type ? ` ${type}` : "");
-  statusEl.innerHTML = message;
-}
-
-function renderKey(code) {
-  keyDisplay.innerHTML = "";
-  [...code].forEach(ch => {
-    const cell = document.createElement("div");
-    cell.className = "kg-cell";
-    cell.textContent = ch;
-    keyDisplay.appendChild(cell);
-  });
-  keyWrap.classList.add("show");
-}
-
-generateBtn.addEventListener("click", async () => {
-  if (!userId || !guildId) {
-    setStatus("Missing user_id or guild_id in URL.", "err");
-    return;
-  }
-
-  generateBtn.disabled = true;
-  setStatus('<span class="spinner"></span>Generating your key...');
-
-  try {
-    const res = await fetch(`${API_BASE}/api/key/generate`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        user_id: Number(userId)
-      })
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error("Failed to generate key.");
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spicy Vault • Key Generator</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    :root {
+      --bg: #09070f;
+      --bg2: #120d1e;
+      --card: rgba(17, 14, 29, 0.9);
+      --line: rgba(167, 139, 250, 0.18);
+      --text: #f5f3ff;
+      --muted: #b7abc9;
+      --accent: #8b5cf6;
+      --accent2: #a855f7;
+      --success: #86efac;
+      --danger: #fca5a5;
     }
 
-    currentKey = data.code;
-    renderKey(data.code);
-    metaEl.textContent = `Expires at ${data.expires} UTC`;
-    setStatus("Key generated successfully.", "ok");
+    * {
+      box-sizing: border-box;
+    }
 
-  } catch (err) {
-    setStatus(err.message || "Something went wrong.", "err");
-  } finally {
-    generateBtn.disabled = false;
-  }
-});
+    html, body {
+      margin: 0;
+      min-height: 100%;
+    }
 
-copyBtn.addEventListener("click", async () => {
-  if (!currentKey) return;
+    body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(139,92,246,.18), transparent 25%),
+        radial-gradient(circle at 80% 10%, rgba(192,132,252,.12), transparent 20%),
+        linear-gradient(180deg, var(--bg), var(--bg2));
+    }
 
-  try {
-    await navigator.clipboard.writeText(currentKey);
-    copyBtn.textContent = "Copied!";
-    setTimeout(() => {
-      copyBtn.textContent = "Copy Key";
-    }, 1200);
-  } catch {
-    copyBtn.textContent = "Copy Failed";
-    setTimeout(() => {
-      copyBtn.textContent = "Copy Key";
-    }, 1200);
-  }
-});
-</script>
+    .kg-page {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px 16px;
+    }
+
+    .kg-card {
+      width: min(720px, 100%);
+      background: linear-gradient(180deg, rgba(18,14,30,0.96), rgba(24,18,38,0.98));
+      border: 1px solid rgba(163,116,255,0.20);
+      border-radius: 28px;
+      box-shadow: 0 20px 80px rgba(0,0,0,0.45);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .kg-card::before {
+      content: "";
+      position: absolute;
+      inset: -20%;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(139,92,246,.22), transparent 26%),
+        radial-gradient(circle at 80% 10%, rgba(192,132,252,.16), transparent 24%),
+        radial-gradient(circle at 50% 100%, rgba(168,85,247,.15), transparent 28%);
+      pointer-events: none;
+    }
+
+    .kg-inner {
+      position: relative;
+      z-index: 1;
+      padding: 32px;
+    }
+
+    .kg-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      padding: 10px 14px;
+      border-radius: 999px;
+      color: #f3e8ff;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    .kg-title {
+      margin: 18px 0 10px;
+      font-size: clamp(32px, 5vw, 54px);
+      line-height: 1.02;
+      color: #fff;
+    }
+
+    .kg-sub {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+      max-width: 620px;
+    }
+
+    .kg-panel {
+      margin-top: 24px;
+      border-radius: 24px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      padding: 20px;
+    }
+
+    .kg-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .btn {
+      appearance: none;
+      border: none;
+      text-decoration: none;
+      text-align: center;
+      padding: 14px 18px;
+      border-radius: 16px;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+      transition: transform .15s ease, opacity .15s ease;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: white;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn:disabled {
+      opacity: .65;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .ghost-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px 18px;
+      border-radius: 16px;
+      text-decoration: none;
+      font-weight: 700;
+      color: #f3e8ff;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .kg-key-wrap {
+      margin-top: 22px;
+      display: none;
+      animation: fadeUp .35s ease;
+    }
+
+    .kg-key-wrap.show {
+      display: block;
+    }
+
+    .kg-key-label {
+      font-size: 12px;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: #d9c8ff;
+      margin-bottom: 12px;
+    }
+
+    .kg-key-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .kg-key {
+      flex: 1 1 320px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .kg-cell {
+      width: 72px;
+      height: 82px;
+      border-radius: 18px;
+      display: grid;
+      place-items: center;
+      font-size: 34px;
+      font-weight: 800;
+      color: #fff;
+      background: linear-gradient(180deg, rgba(139,92,246,.18), rgba(139,92,246,.08));
+      border: 1px solid rgba(196,181,253,.28);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+    }
+
+    .kg-copy {
+      min-width: 160px;
+    }
+
+    .kg-meta {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .kg-status {
+      margin-top: 14px;
+      min-height: 22px;
+      font-size: 14px;
+    }
+
+    .kg-status.ok {
+      color: var(--success);
+    }
+
+    .kg-status.err {
+      color: var(--danger);
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: #fff;
+      animation: spin .8s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="kg-page">
+    <section class="kg-card">
+      <div class="kg-inner">
+        <div class="kg-badge">Spicy Vault • Secure Access</div>
+        <h1 class="kg-title">Generate your private key</h1>
+        <p class="kg-sub">
+          This one-time code is linked to your Discord account and can only be redeemed once before expiry.
+        </p>
+
+        <div class="kg-panel">
+          <div class="kg-actions">
+            <button id="generateBtn" class="btn" type="button">Generate Key</button>
+            <a href="/" class="ghost-link">Back Home</a>
+          </div>
+
+          <div id="status" class="kg-status"></div>
+
+          <div id="keyWrap" class="kg-key-wrap">
+            <div class="kg-key-label">Your Access Key</div>
+            <div class="kg-key-row">
+              <div id="keyDisplay" class="kg-key"></div>
+              <button id="copyBtn" class="btn kg-copy" type="button">Copy Key</button>
+            </div>
+            <div id="meta" class="kg-meta"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const API_BASE = "https://spicyvault-api.onrender.com";
+
+    const params = new URLSearchParams(window.location.search);
+    const userId = params.get("user_id");
+    const guildId = params.get("guild_id");
+
+    const generateBtn = document.getElementById("generateBtn");
+    const copyBtn = document.getElementById("copyBtn");
+    const keyWrap = document.getElementById("keyWrap");
+    const keyDisplay = document.getElementById("keyDisplay");
+    const statusEl = document.getElementById("status");
+    const metaEl = document.getElementById("meta");
+
+    let currentKey = "";
+
+    function setStatus(message, type = "") {
+      statusEl.className = "kg-status" + (type ? ` ${type}` : "");
+      statusEl.innerHTML = message;
+    }
+
+    function renderKey(code) {
+      keyDisplay.innerHTML = "";
+      [...code].forEach(ch => {
+        const cell = document.createElement("div");
+        cell.className = "kg-cell";
+        cell.textContent = ch;
+        keyDisplay.appendChild(cell);
+      });
+      keyWrap.classList.add("show");
+    }
+
+    generateBtn.addEventListener("click", async () => {
+      if (!userId || !guildId) {
+        setStatus("Missing user_id or guild_id in URL.", "err");
+        return;
+      }
+
+      generateBtn.disabled = true;
+      setStatus('<span class="spinner"></span>Generating your key...');
+
+      try {
+        const res = await fetch(`${API_BASE}/api/key/generate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            user_id: Number(userId)
+          })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.detail || data.error || "Failed to generate key.");
+        }
+
+        currentKey = data.code;
+        renderKey(data.code);
+        metaEl.textContent = `Expires at ${data.expires} UTC • One-time use • Bound to your Discord account`;
+        setStatus("Key generated successfully.", "ok");
+      } catch (err) {
+        setStatus(err.message || "Something went wrong.", "err");
+      } finally {
+        generateBtn.disabled = false;
+      }
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      if (!currentKey) return;
+
+      try {
+        await navigator.clipboard.writeText(currentKey);
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => {
+          copyBtn.textContent = "Copy Key";
+        }, 1200);
+      } catch {
+        copyBtn.textContent = "Copy Failed";
+        setTimeout(() => {
+          copyBtn.textContent = "Copy Key";
+        }, 1200);
+      }
+    });
+  </script>
+</body>
+</html>
