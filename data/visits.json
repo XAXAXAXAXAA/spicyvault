@@ -1705,8 +1705,8 @@
     "country_code": "FR",
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
     "browser": "Chrome",
-    "path": "/",
+    "path": "/admin",
     "referer": "",
-    "created_at": "2026-03-22T22:35:59.841Z"
+    "created_at": "2026-03-22T22:36:01.658Z"
   }
 ]
