@@ -1788,5 +1788,15 @@
     "path": "/",
     "referer": "",
     "created_at": "2026-03-23T11:54:24.357Z"
+  },
+  {
+    "id": 180,
+    "ip": "152.32.141.62",
+    "country_code": "NG",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    "browser": "Chrome",
+    "path": "/admin",
+    "referer": "",
+    "created_at": "2026-03-23T11:54:26.410Z"
   }
 ]
